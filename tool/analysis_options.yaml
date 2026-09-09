@@ -1,0 +1,11 @@
+# Scoped to tool/ only. The app's own rules are unchanged.
+include: ../analysis_options.yaml
+
+linter:
+  rules:
+    # The Phase 0 scripts are named 01_login.dart … 07_record.dart so the
+    # directory listing reflects the order docs/SPEC.md §6 runs them in. That
+    # ordering carries more information than the naming convention does on
+    # seven throwaway scripts, and renaming them would break the step table in
+    # tool/README.md and the references in docs/DECISIONS.md.
+    file_names: false

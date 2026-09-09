@@ -23,3 +23,43 @@ ios/Runner/GoogleService-Info.plist
 .vscode/
 *.iml
 .DS_Store
+
+# --- Flutter scaffold additions (Phase 1) ---
+# Miscellaneous
+*.class
+*.log
+*.swp
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ
+*.ipr
+*.iws
+
+# Flutter/Dart/Pub
+**/doc/api/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication / obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android build artifacts
+/android/app/debug
+/android/app/profile
+/android/app/release
+.widget_preview/
+
+# FlutterFire: generated, but regenerable and not a secret store.
+# google-services.json stays ignored above.
+
+# Local Claude Code settings — tooling, not app config
+.claude/

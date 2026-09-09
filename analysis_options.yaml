@@ -1,0 +1,34 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    # Casts and raw types are how Firebase/broker types leak past a layer
+    # boundary unnoticed. Making them errors keeps §4.1 mechanical rather than
+    # aspirational.
+    strict-casts: true
+    strict-raw-types: true
+    strict-inference: true
+
+  errors:
+    # CLAUDE.md bans print outright: one logger, and it never logs a token.
+    avoid_print: error
+    # An unawaited future in auth or feed code is a race, not a style nit.
+    unawaited_futures: error
+    todo: ignore
+
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/firebase_options.dart"
+    - build/**
+    - android/**
+
+linter:
+  rules:
+    always_declare_return_types: true
+    prefer_final_locals: true
+    prefer_single_quotes: true
+    unawaited_futures: true
+    avoid_dynamic_calls: true
+    use_super_parameters: true
+    sort_constructors_first: true

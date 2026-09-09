@@ -1,12 +1,31 @@
-# Phase 0 only. This is a plain Dart package so the throwaway verification
-# scripts under tool/ can run without a Flutter project existing yet.
-# Phase 1 replaces this with the real Flutter pubspec.
-name: nifty_options_tracker_tool
-description: Phase 0 broker-API verification scripts. Not the app.
+name: nifty_options_tracker
+description: Live Nifty options tracker — read-only market data over Angel One SmartAPI.
 publish_to: none
+version: 0.1.0
 
 environment:
-  sdk: ^3.6.0
+  sdk: ^3.13.2
 
 dependencies:
-  crypto: ^3.0.6  # HMAC-SHA1 for local RFC-6238 TOTP generation
+  flutter:
+    sdk: flutter
+
+  # Firebase governs who may open the app. It never touches the broker session.
+  firebase_core: ^4.14.0
+  firebase_auth: ^6.6.1
+  google_sign_in: ^7.2.0
+
+  flutter_riverpod: ^3.4.3
+  go_router: ^18.0.1
+
+  # HMAC-SHA1 for local RFC-6238 TOTP generation (Phase 3), and required now by
+  # the Phase 0 verification scripts under tool/.
+  crypto: ^3.0.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
