@@ -12,7 +12,12 @@ tool/.session.json
 build/
 .flutter-plugins
 .flutter-plugins-dependencies
-pubspec.lock
+
+# pubspec.lock IS committed. This is an application, not a library: the
+# lockfile is what makes a build reproduce the dependency versions the app was
+# actually tested against. (A library omits it, since its consumers resolve
+# their own.) It was ignored in Phase 0 when this was a throwaway script
+# package.
 
 # Firebase config (contains project identifiers)
 android/app/google-services.json
