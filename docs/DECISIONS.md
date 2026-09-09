@@ -300,3 +300,182 @@ far-OTM one — so §3.5 trap 5 (one-sided or empty book) gets a real fixture ra
 than a hand-written one. If the far-OTM strike turns out not to trade at all during
 the capture, the script says so explicitly rather than silently producing a fixture
 that lacks the case it was meant to cover.
+
+---
+
+## 2026-09-10 — Phase 1: no use-case layer
+
+§4.1 asks for this to be recorded explicitly, so: there is no `usecases/`
+directory and there will not be one.
+
+At this size every use case would be a one-line pass-through — `SignIn(repo)`
+calling `repo.signInWithEmail(...)` and returning the result unchanged. That is
+not a seam, it is a forwarding address. It adds a file and an injection site per
+operation while giving nothing that could be tested or substituted independently
+of the repository behind it.
+
+The seam that actually earns its keep here is the **repository interface**:
+`AuthRepository` lives in `domain/`, its Firebase implementation lives in
+`data/`, and everything above the interface is written against the abstraction.
+That is the boundary a test overrides and the boundary a provider swap would
+cross.
+
+Where a use-case layer does pay is when one operation orchestrates several
+repositories, or carries policy belonging to neither the UI nor any single data
+source. If Phase 3 needs "resolve a contract, then open a feed, then reconcile
+with the broker session", that is the point to revisit — and it would be one
+class, not a directory of them.
+
+## 2026-09-10 — Riverpod 3 retries failed providers, so auth actions are not providers
+
+The most consequential thing found while building Phase 1, because the failure
+mode is silent and looks like a UI bug rather than a state-management one.
+
+**What Riverpod 3 does.** `ProviderContainer.defaultRetry` applies to every
+provider unless overridden. When a provider body throws, it re-runs it — up to
+**ten times**, with exponential backoff from 200 ms to 6.4 s. It declines to
+retry only `Error`s and `ProviderException`s; a plain `Exception` is retried.
+
+**Why that breaks auth.** `FirebaseAuthException` is an `Exception`. So the
+natural-looking implementation —
+
+```dart
+final signInProvider = FutureProvider.family((ref, creds) =>
+    repo.signInWithEmail(email: creds.email, password: creds.password));
+```
+
+— responds to a wrong password by retrying that wrong password ten times over
+roughly twelve seconds. The user watches a spinner. The "invalid credentials"
+state §5.2 requires never renders, because `AsyncError` is not reached until the
+retries are exhausted. Worse, it hammers the identity provider with known-bad
+credentials and would walk straight into `too-many-requests`.
+
+**What we do instead.** Sign-in, registration and sign-out are imperative methods
+on an `AuthController extends Notifier`, which catch `AppFailure` and place it in
+state. Nothing throws out of a provider body, so the retry machinery is never
+engaged on a code path where retrying is both useless and actively harmful.
+
+`authStateProvider` remains a `StreamProvider`, which is correct: it observes a
+stream that does not throw.
+
+**The regression guard.** `test/auth/auth_controller_test.dart` asserts the
+repository is called **exactly once** for a failed sign-in. If someone later
+converts these to `FutureProvider`s, that count becomes 10 and the test fails
+with the reason attached.
+
+The general principle worth carrying into Phase 3: automatic retry is right for
+*idempotent reads that fail transiently* — a quote fetch, an instrument master
+download — and wrong for anything a user is waiting on that failed because their
+input was wrong. Phase 0 found the mirror image on the broker side, where a tight
+reconnect loop is what *keeps* the socket shut.
+
+## 2026-09-10 — Auth state has three cases, not two
+
+`AuthState` is `AuthUnknown | AuthSignedOut | AuthSignedIn`. The third case is
+the whole reason the acceptance criterion "kill and relaunch and remain signed
+in" passes.
+
+Firebase restores a persisted session **asynchronously**. For the first frames
+after launch, `authStateChanges()` has emitted nothing — the user is not signed
+out, it is simply not yet known whether they are. Modelling that as a boolean
+forces "not yet known" to collapse into "signed out", and the router then sends
+every cold start to `/sign-in`, only to bounce back to `/home` once Firebase
+reports.
+
+The result is a visible flash of the sign-in form on every launch. Functionally
+the session *was* restored, but it looks exactly like persistence being broken,
+and it is the kind of thing that reads as a bug in a demo.
+
+So `AuthUnknown` parks on a splash route and decides nothing. Only a definite
+answer moves the user.
+
+The redirect rules are a pure function — `resolveRedirect(state:, location:)` in
+`lib/app/routes.dart` — taking no Flutter or GoRouter types. That keeps the part
+of routing carrying actual logic testable without pumping a widget tree or
+standing up Firebase. `test/app/routes_test.dart` covers the unknown case
+directly, and additionally asserts that **every** redirect target is itself
+stable: if `resolveRedirect` sends a user somewhere that also redirects, that is
+an infinite navigation loop, and the test proves the fixed point is reached in
+one hop.
+
+Note also `refreshListenable`. GoRouter evaluates `redirect` on navigation; it
+does not watch Riverpod. Without bridging auth state to a `Listenable`, signing
+out would leave the user sitting on a screen they are no longer entitled to see
+until they happened to navigate.
+
+## 2026-09-10 — google_sign_in v7: idToken only, and cancellation is not an error
+
+§5.2 warned that v7 is a rewrite. Confirmed against the package source rather
+than tutorials, since the migration is recent enough that most published examples
+are wrong:
+
+- `GoogleSignIn.instance` is a singleton and `initialize()` must be awaited once
+  before any other call. It therefore lives in `main()`, not in the repository —
+  a repository can be constructed more than once, which makes it the wrong owner
+  for a once-per-process guarantee.
+- `signIn()` became `authenticate()`. There is no `currentUser`.
+- **`GoogleSignInAuthentication` exposes `idToken` and nothing else.** The
+  `accessToken` that older code passes to `GoogleAuthProvider.credential` no
+  longer exists on it. This is fine: `GoogleAuthProvider.credential` asserts only
+  that *one* of `idToken` / `accessToken` is non-null, so the idToken-only path is
+  valid — verified in
+  `firebase_auth_platform_interface/lib/src/providers/google_auth.dart`.
+- Cancellation **throws** `GoogleSignInException` with
+  `code == GoogleSignInExceptionCode.canceled` — an enum value, not the string
+  `'canceled'` — rather than returning null as v6 did.
+
+**Cancellation is modelled as a null return, not an exception.** §5.2 requires
+that dismissing the picker shows nothing at all, and the cheapest way to
+guarantee that is to make the "user changed their mind" path structurally unable
+to reach the error handler: `signInWithGoogle()` returns `AppUser?`, and the
+repository converts the cancellation exception to `null` at the boundary. A
+caller cannot render a banner for a case that never produces a failure object.
+
+**A null `idToken` gets its own error path** rather than falling into the generic
+handler. Per §5.2 it almost always means `serverClientId` was given the Android
+OAuth client ID instead of the Web one, and the symptom is otherwise a sign-in
+that fails with nothing useful in the message.
+
+## 2026-09-10 — Architecture rules are tested, not just documented
+
+`test/architecture_test.dart` reads the source and asserts the CLAUDE.md rules:
+`domain/` imports nothing but `dart:` and its own relative files; `domain/` never
+imports `data/` or `presentation/`; `data/` never imports `presentation/`; no
+`print` in `lib/`; no hard-coded credential-shaped literal; no mutating broker
+endpoint anywhere; and the Firebase auth layer contains no broker vocabulary.
+
+A convention that lives only in a document drifts the first time someone is in a
+hurry. These fail the build instead, which is the difference between a rule and a
+preference.
+
+The broker-coupling test deserves its own note, because it enforces the
+two-auth-systems rule in practice. It scans `data/auth/` and `presentation/auth/`
+for broker vocabulary (`angel`, `smartapi`, `jwtToken`, `feedToken`, `totp`, …)
+in non-comment lines. Phase 0 established why that separation is load-bearing
+rather than tidy: Angel One's WebSocket rate-limit rejection is byte-identical to
+an auth failure, so any code path letting broker trouble reach Firebase's
+sign-out would log the user out of the app over a two-second throttle.
+
+The purity test was checked for vacuity by temporarily adding
+`import 'package:flutter/material.dart'` to `domain/entities/app_user.dart` and
+confirming it failed. A green architecture test that cannot go red is worse than
+none, since it manufactures confidence.
+
+## 2026-09-10 — Config via --dart-define rather than a bundled .env
+
+Phase 1 needs one configuration value, the Google **Web** OAuth client ID, and it
+is not a secret — an OAuth client ID is a public identifier, and the same value
+already ships inside `google-services.json`.
+
+`flutter_dotenv` was **not** added. Phase 1 does not need `.env` at all, and
+adding a dependency before the phase requiring it means choosing its API before
+knowing the constraints. `AppConfig.fromEnvironment()` reads
+`String.fromEnvironment`, which is compile-time and needs no asset.
+
+This decision must be revisited in Phase 3, and the honest position recorded then
+rather than assumed now: the Angel One credentials are genuinely secret and
+authenticate a full trading account. Neither a `--dart-define` nor a bundled
+`.env` asset protects them from anyone holding the APK — a dart-define is a
+compiled-in string constant, trivially recoverable. The choice there is about
+which is *less bad* operationally, not about achieving secrecy, and the README
+security note is where that gets stated plainly.
