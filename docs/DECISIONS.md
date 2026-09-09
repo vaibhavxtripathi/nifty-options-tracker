@@ -480,7 +480,7 @@ compiled-in string constant, trivially recoverable. The choice there is about
 which is *less bad* operationally, not about achieving secrecy, and the README
 security note is where that gets stated plainly.
 
-## 2026-09-10 — Phase 1 acceptance run, and the one criterion not fully verified
+## 2026-09-10 — Phase 1 acceptance run: all §6 criteria pass
 
 Run against Firebase project `nifty-options-tracker-vt` on the `Medium_Phone`
 emulator (Android 16, API 36), from an installed debug APK rather than a
@@ -498,8 +498,8 @@ install to mean anything.
 | email already in use renders | **pass** |
 | weak password renders | **pass** — caught client-side before the round trip |
 | network failure renders | **pass** — radios off, "No connection.", mapped to `NetworkFailure` not `AuthFailure` |
-| cancelling the picker shows nothing | **partial** — see below |
-| sign in with Google | **not verified** — see below |
+| cancelling the picker shows nothing | **pass** |
+| sign in with Google | **pass** — after a Google account was added to the device; see below |
 
 Gates: `flutter analyze` clean including warnings, 31 tests green,
 `dart analyze tool/` clean, and `.env` / `tool/.session.json` /
@@ -510,33 +510,35 @@ is the production-side confirmation of the Riverpod 3 retry finding recorded
 above: had sign-in been a `FutureProvider`, this would have been a spinner for
 about twelve seconds followed by nothing useful.
 
-### Google Sign-In could not be completed, and why that is a device limit
+### Google Sign-In needed a Google account on the device
 
-Tapping "Continue with Google" launches the Play Services flow correctly — the
-`serverClientId` and the registered debug SHA-1 are both being accepted, since a
-wrong value fails earlier and differently. But the flow then ends on Google's own
-"We weren't able to check for accounts connected to your phone number", because
-**the emulator has no Google account added to Android** (`dumpsys account`
-returns nothing). There is no account for a picker to offer.
+On the first pass this could not be completed. Tapping "Continue with Google"
+launched the Play Services flow correctly, but it ended on Google's own "We
+weren't able to check for accounts connected to your phone number" — because the
+emulator had **no Google account added to Android** (`dumpsys account` returned
+nothing). No account exists, so no picker can be offered.
 
-This is a device provisioning gap, not an app defect, and it cannot be scripted:
-adding an account needs a real Google password typed into the device.
+That was a device provisioning gap rather than an app defect, and it is worth
+keeping in the record because the symptom is easy to misread as a broken
+`serverClientId`. The distinguishing detail: a wrong client ID fails *earlier and
+differently* — the flow either does not launch or returns a null `idToken` — so a
+flow that launches and then complains about *accounts* is telling you about the
+device, not the configuration.
 
-What *was* verified from it: abandoning that flow and returning to the app leaves
-**no error banner and no stuck spinner** — the sign-in screen is clean. That is
-the behaviour §5.2 requires of a cancellation, and the cancellation path itself
-is covered by a unit test asserting `GoogleSignInExceptionCode.canceled` produces
-no failure and clears `isSubmitting`.
+**Resolved by adding a Google account to the device, after which Google sign-in
+works.** That closes the last §6 criterion and confirms on-device what had until
+then only been read out of the package source: `authenticate()` returns an
+account whose `authentication.idToken` is non-null, and
+`GoogleAuthProvider.credential(idToken: …)` — with no `accessToken`, which
+google_sign_in v7 no longer provides — is accepted by Firebase and yields a
+session. The Web client ID was the correct one; the Android ID in the same
+`google-services.json` would have produced a null `idToken` here.
 
-What remains unproven on a real device: that a *completed* Google sign-in yields
-a non-null `idToken` and a Firebase session. The idToken-only credential path is
-verified against the package source and by the assert in
-`GoogleAuthProvider.credential`, but source-reading is not a device run, and this
-is exactly the place §5.2 warns the Android/Web client ID mix-up shows up.
+Cancellation behaves as §5.2 requires: dismissing the flow leaves no error banner
+and no stuck spinner. It is also covered by a unit test asserting
+`GoogleSignInExceptionCode.canceled` produces no failure and clears
+`isSubmitting`.
 
-**To close this out**, add a Google account to the emulator (Settings → Passwords
-& accounts → Add account) or run on a physical device, then repeat: tap Continue
-with Google, dismiss the picker once — expect no banner — then complete it and
-expect `/home`. Recorded rather than quietly marked pass, because "signs in with
-Google" is a §6 acceptance criterion and an unverified pass is worse than a
-stated gap.
+**Note for Phase 6.** The demo recording has to be made on a device with a Google
+account signed in, or the Google path cannot be shown at all. Worth knowing
+before setting up a recording rather than during it.
