@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+*.env
+!.env.example
+
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# Firebase config (contains project identifiers)
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
