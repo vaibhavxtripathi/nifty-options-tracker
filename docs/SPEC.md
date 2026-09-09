@@ -131,7 +131,8 @@ Four parsing hazards, all of which the mapper must handle at the boundary:
 
 **Why the whole file and not a per-expiry endpoint.** Angel One publishes no option-contract
 endpoint equivalent to a filtered query; `searchScrip` searches by text but does not
-enumerate a chain. The master file is the only complete source. It is ~8 MB of JSON — large
+enumerate a chain. The master file is the only complete source. It is **~32.5 MB of JSON**
+(measured live 2026-09-09 in Phase 0; an earlier estimate of ~8 MB was wrong) — large
 enough to matter on a phone, small enough to parse once and cache. **Parse it off the UI
 isolate** (`compute()`); a synchronous 145k-element `jsonDecode` will visibly jank the frame.
 Record this as a deliberate decision in `docs/DECISIONS.md`.

@@ -3,6 +3,9 @@
 *.env
 !.env.example
 
+# Phase 0 throwaway: live broker session tokens. Never commit.
+tool/.session.json
+
 # Flutter / Dart
 .dart_tool/
 .packages

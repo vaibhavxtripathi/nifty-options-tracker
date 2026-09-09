@@ -1,0 +1,12 @@
+# Phase 0 only. This is a plain Dart package so the throwaway verification
+# scripts under tool/ can run without a Flutter project existing yet.
+# Phase 1 replaces this with the real Flutter pubspec.
+name: nifty_options_tracker_tool
+description: Phase 0 broker-API verification scripts. Not the app.
+publish_to: none
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  crypto: ^3.0.6  # HMAC-SHA1 for local RFC-6238 TOTP generation
