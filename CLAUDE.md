@@ -1,7 +1,8 @@
 # Project: Live Nifty Options Tracker (Flutter)
 
 A Flutter app: user signs in, searches a Nifty option, and watches live market
-data stream over a WebSocket from Upstox. Read-only. No order placement, ever.
+data stream over a WebSocket from Angel One SmartAPI. Read-only. No order
+placement, ever.
 
 Full specification: `docs/SPEC.md`. Read the relevant phase section before
 starting work. Do not guess at API shapes — every broker field name, endpoint
@@ -41,10 +42,10 @@ can't be fixed.
 
 - **Dependencies point inward.** `presentation/` → `domain/` ← `data/`.
   `domain/` imports nothing but `dart:core` and pure Dart packages — no
-  Flutter, no Firebase, no http, no protobuf-generated types. The test: delete
+  Flutter, no Firebase, no http, no broker-generated types. The test: delete
   `presentation/` and everything else still compiles.
 - **Two independent auth systems.** Firebase governs *who may open the app*.
-  The Upstox token governs *whether market data flows*. Different trust
+  The Angel One session governs *whether market data flows*. Different trust
   domains, different lifetimes, different failure types. They never reference
   each other. A broker failure must never sign a user out.
 - **No Scaffold outside `template.dart`.** Screens supply a body; the template
@@ -63,8 +64,12 @@ can't be fixed.
   messages, or in `docs/`. If you need a value, reference the env var name.
 - **Never commit `.env`.** It is gitignored from the first commit. Maintain
   `.env.example` with empty values instead.
-- **Never implement order placement**, or any Upstox endpoint that mutates
+- **Never implement order placement**, or any Angel One endpoint that mutates
   state, even as dead code, even commented out. Read-only endpoints only.
+  This matters more than it did with a read-only broker token: the Angel One
+  credential authenticates a **full trading account**, so a mutating call that
+  slips in would place a real order with real money. Read-only endpoints only,
+  no exceptions, no "just for testing".
 - **No `localStorage`/`sessionStorage`.** Irrelevant here; flagging in case of
   web experiments.
 - **Don't hand-roll auth session persistence.** Firebase already persists and
