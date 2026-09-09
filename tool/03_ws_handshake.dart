@@ -26,30 +26,12 @@ Future<void> main() async {
 
   // -- b) redirect check -----------------------------------------------------
   //
-  // Probed over https:// with the same path. A 101/4xx means the endpoint is
-  // terminal; a 3xx would mean §3.3 is wrong and a redirect-following client
-  // is needed.
-  step('Redirect check — does the endpoint 302 anywhere?');
-  final probeClient = HttpClient();
-  try {
-    final probe = await probeClient
-        .getUrl(Uri.parse(wsUrl.replaceFirst('wss://', 'https://')));
-    probe.followRedirects = false;
-    final probeRes = await probe.close();
-    info('HTTP ${probeRes.statusCode} on a plain GET');
-    if (probeRes.isRedirect ||
-        (probeRes.statusCode >= 300 && probeRes.statusCode < 400)) {
-      fail('REDIRECT to ${probeRes.headers.value("location")} — §3.3 is wrong');
-    } else {
-      pass('No redirect; §3.3 confirmed, WebSocket.connect is sufficient');
-    }
-    await probeRes.drain<void>();
-  } on Object catch (e) {
-    info('Plain GET failed (${e.runtimeType}) — expected for a WS-only '
-        'endpoint; the connect below is the real test.');
-  } finally {
-    probeClient.close();
-  }
+  // §3.3 claims there is no 302. A successful WebSocket.connect below proves
+  // that on its own: Dart's client does NOT follow redirects during an
+  // upgrade, so if the endpoint redirected, the connect would fail. A separate
+  // HTTP probe was removed deliberately — the gateway rate-limits connections
+  // per client over a short window, and spending one on a probe made the real
+  // handshake fail (see DECISIONS.md).
 
   // -- a) good handshake -----------------------------------------------------
   step('Connecting with the four headers from §3.3');
@@ -104,6 +86,11 @@ Future<void> main() async {
   step('Negative test — omitting x-feed-token');
   info('§3.1 says the feed token is WebSocket-only and mandatory. This shows '
       'the rejection shape Phase 3 has to classify.');
+  // Pause first: consecutive connects are rate-limited, and a throttled
+  // rejection here would be indistinguishable from a credential rejection —
+  // i.e. a false pass.
+  info('Waiting 20s so this is not confounded with connection throttling...');
+  await Future<void>.delayed(const Duration(seconds: 20));
   try {
     final bad = await WebSocket.connect(wsUrl, headers: {
       'Authorization': 'Bearer $jwt',
@@ -119,4 +106,9 @@ Future<void> main() async {
   }
 
   heading('STEP 3 COMPLETE');
+
+  // A WebSocket that was ever opened keeps a socket registered with the event
+  // loop even after close(), so the VM will not exit on its own. Phase 0
+  // scripts are one-shot; exit explicitly rather than hanging the terminal.
+  exit(0);
 }

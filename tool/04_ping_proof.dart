@@ -1,7 +1,7 @@
 // Phase 0, step 4 — prove SPEC §3.3 / trap 8: the 10-second ping is mandatory.
 //
 // Two runs, side by side:
-//   A: subscribe, send NO ping, hold 120s  -> expect death around 60s
+//   A: subscribe, send NO ping, hold 240s  -> expect death on idle timeout
 //   B: subscribe, ping every 10s, hold 180s -> expect survival
 //
 // Death is detected by the close/error event and by a failed write, NOT by
@@ -106,6 +106,9 @@ Future<HoldResult> hold({
   });
 
   await finished.future;
+  // The close frame can arrive in the same tick the hold window expires. Yield
+  // briefly so a death that already happened is recorded before we score it.
+  await Future<void>.delayed(const Duration(milliseconds: 750));
   pinger?.cancel();
   timeout.cancel();
   ticker.cancel();
@@ -139,9 +142,15 @@ Future<void> main() async {
   // has aged out.
   const token = '47163';
 
+  // 240s, not 120s. The first run of this script used 120s and the server's
+  // "Connection Idle Timeout" close arrived at almost exactly t+120s — the
+  // hold window expired in the same tick, so the arm was scored as "survived"
+  // when it had in fact just died. Give the timeout room to land well inside
+  // the window; hold() returns early the moment death is observed, so a
+  // generous ceiling costs nothing when the socket does die.
   final a = await hold(
     label: 'ARM A no ping',
-    duration: const Duration(seconds: 120),
+    duration: const Duration(seconds: 240),
     sendPings: false,
     headers: headers,
     token: token,
@@ -160,8 +169,11 @@ Future<void> main() async {
   );
 
   heading('RESULT');
-  info('ARM A (no ping)   : ${a.died ? "died at t+${a.diedAfterSeconds}s — ${a.reason}" : "survived 120s"}, ${a.frames} frames');
+  info('ARM A (no ping)   : ${a.died ? "died at t+${a.diedAfterSeconds}s — ${a.reason}" : "survived 240s"}, ${a.frames} frames');
   info('ARM B (with ping) : ${b.died ? "died at t+${b.diedAfterSeconds}s — ${b.reason}" : "survived 180s"}, ${b.frames} frames');
+  info('');
+  info('Note: the server answers each "ping" with a text "pong". Phase 3 can');
+  info('use a missing pong as a liveness signal, not just the close event.');
   info('');
 
   if (a.died && !b.died) {
@@ -170,7 +182,7 @@ Future<void> main() async {
         'connection state machine, not as an afterthought.');
   } else if (!a.died && !b.died) {
     fail('Both arms survived — the ping may not be strictly required, OR the '
-        'idle timeout is longer than 120s.');
+        'idle timeout is longer than 240s.');
     info('Re-run ARM A with a longer duration before editing §3.3.');
   } else if (a.died && b.died) {
     fail('BOTH died. The ping alone is not sufficient — investigate before '
@@ -180,4 +192,7 @@ Future<void> main() async {
   }
 
   heading('STEP 4 COMPLETE');
+
+  // Opened sockets keep the event loop alive; exit rather than hang.
+  exit(0);
 }

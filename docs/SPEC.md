@@ -74,23 +74,38 @@ console. The secret lives in `.env` as `ANGEL_TOTP_SECRET` and is never logged o
 > it never calls a mutating endpoint — but the credential itself is not scoped read-only.
 > This is the honest trade-off Angel One forces, and §6 Phase 6 requires it in the README.
 
-Every authenticated REST request carries this header set. All of them are required; the
-gateway rejects requests with any missing, even the ones that look like telemetry:
+Every authenticated REST request carries this header set:
 
 ```
 Content-type:     application/json
 Accept:           application/json
-X-PrivateKey:     {api_key}
+X-PrivateKey:     {api_key}          <- REQUIRED
 X-UserType:       USER
-X-SourceID:       WEB
+X-SourceID:       WEB                <- REQUIRED
 X-ClientLocalIP:  {any valid local IP}
 X-ClientPublicIP: {any valid public IP}
-X-MACAddress:     {any valid MAC}
-Authorization:    Bearer {jwtToken}
+X-MACAddress:     {any valid MAC}    <- REQUIRED
+Authorization:    Bearer {jwtToken}  <- REQUIRED
 ```
 
-The three IP/MAC headers are not validated for correctness but must be present and
-well-formed. Send stable placeholders; do not attempt real device fingerprinting.
+**Measured in Phase 0 (2026-09-10), correcting an earlier claim that all nine are
+required.** Dropping each header in turn against `getProfile` shows only **four** are
+enforced — `X-PrivateKey`, `X-SourceID`, `X-MACAddress` and `Authorization`. The
+gateway answers a missing one with HTTP 400 and `errorcode AB1012`,
+`"Required header '<name>' is missing"`. The other five (`Content-type`, `Accept`,
+`X-UserType`, `X-ClientLocalIP`, `X-ClientPublicIP`) are accepted when absent.
+
+Note the error text for the MAC header names it `X-MACaddress`, with different casing
+from the documented `X-MACAddress`; HTTP header names are case-insensitive, so this is
+cosmetic, but it is a hint that the gateway's validation list is hand-maintained.
+
+**Send all nine anyway.** The enforced set is undocumented and could widen without
+notice, the cost is a few bytes per request, and matching the official SDK's behaviour
+is the defensive choice. The value of knowing which four are load-bearing is
+diagnostic: when a request 400s, these are the ones to check first.
+
+The IP/MAC headers are not validated for correctness — only presence, and only for the
+MAC. Send stable placeholders; do not attempt real device fingerprinting.
 
 ### 3.2 Instrument master (powers the search screen)
 
@@ -181,11 +196,42 @@ best-bid/ask book *and* previous close. LTP mode has none of them; QUOTE has clo
 and no book. This is requirements-driven, not preference.
 
 **Keepalive is the client's job.** Send the literal text `"ping"` every **10 seconds**. This
-is mandatory and is the single most common cause of "socket dies after ~1 minute" reports.
-Upstox auto-ponged; Angel One does not.
+is mandatory and is the single most common cause of "socket dies" reports.
+
+**Measured in Phase 0 (2026-09-10), refining two details:**
+
+- **The idle timeout is 120 seconds, not ~60.** An unpinged socket was closed at
+  t+120s with WebSocket close **code 1001** and reason **`"Connection Idle Timeout"`**.
+  A pinged socket survived 180s with no interruption. The close reason is explicit,
+  so this failure is diagnosable from the close frame — do not let it get logged as a
+  generic disconnect.
+- **The server DOES reply.** Each `"ping"` is answered with a text frame `"pong"`,
+  and one arrives on connect before any ping is sent. The earlier note that "Angel One
+  does not pong" was wrong. This is useful: §5.4 can treat a missing pong as a liveness
+  signal well before the 120-second close, rather than waiting for the socket to drop.
+
+Note that `"pong"` frames are **text**, while market data is **binary**. A decoder that
+assumes every frame is a packet will try to parse `"pong"` as one — discriminate on
+frame type, not on arrival.
 
 **Limits:** 1,000 tokens per session. DEPTH mode is capped at 50 tokens and NSE_CM only —
 irrelevant here, but do not reach for mode 4.
+
+**Connections are rate-limited, and the rejection is indistinguishable from an auth
+failure.** Measured in Phase 0 (2026-09-10): opening three sockets in quick succession
+from one client gets the third refused with
+`HttpException: Connection closed before full header was received` — the *same* error
+class an unauthenticated handshake produces. There is no `429`, no `Retry-After`, and
+no distinguishing message.
+
+Two consequences for §5.4:
+
+1. **Reconnect must back off exponentially from the first retry**, not after several
+   failures. A tight retry loop is itself the thing keeping the socket shut, and it
+   will look exactly like a credential problem.
+2. **Never classify this error as fatal-auth.** Signing the user out, or discarding the
+   broker session, on an error that is really throttling would turn a two-second delay
+   into a full re-login. Treat "connection closed before full header" as *retryable*.
 
 **No `market_info` message.** Angel One sends no segment-status frame, so market-open cannot
 be read off the socket. Derive it from the clock instead (09:15–15:30 IST, weekdays) and
@@ -275,8 +321,11 @@ request. Add in Phase 4 only if the required fields are already solid.
    spread and mid is two lines and signals domain awareness.
 7. **Packet length varies by mode.** A SNAP_QUOTE packet is 379 bytes; LTP is 51. Validate
    length before reading offsets — a short packet must be rejected, never read past its end.
-8. **The socket dies silently without a client ping.** See §3.3. This presents as "worked
-   for a minute, then nothing" and is not a network fault.
+8. **The socket dies without a client ping** — at exactly 120s idle, with close code
+   1001 and reason `"Connection Idle Timeout"` (measured, Phase 0). It presents as
+   "worked for two minutes, then nothing" and is not a network fault. It is not
+   silent if you read the close frame, so surface `closeCode`/`closeReason` in
+   logging rather than reporting a bare disconnect.
 
 ## 4. Architecture
 

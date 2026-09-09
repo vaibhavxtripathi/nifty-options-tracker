@@ -167,3 +167,136 @@ What was ruled out, so this is not re-litigated later:
 Remaining candidates are all account-side: the MPIN differs from what the API
 expects, the secret was rotated or belongs to another app, or the API key has no
 active TOTP registration. Resolving this needs the SmartAPI console, not code.
+
+---
+
+## 2026-09-10 — Phase 0 steps 1, 3, 4, 5 verified live
+
+Credentials were corrected (the earlier `AB1050` was account-side, as suspected —
+the TOTP secret in `.env` is now 26 characters rather than 52). Login succeeds and
+returns all three tokens. Four of the seven Phase 0 steps now pass against the live
+API; steps 6–7 await market hours.
+
+### §3.1 corrected: only four of the nine headers are enforced
+
+The spec claimed the gateway "rejects requests with any missing". Measured by
+dropping each header in turn against the read-only `getProfile`, only four are
+actually enforced:
+
+| Header | Result |
+|---|---|
+| `X-PrivateKey` | **required** — HTTP 400, `AB1012` |
+| `X-SourceID` | **required** — HTTP 400, `AB1012` |
+| `X-MACAddress` | **required** — HTTP 400, `AB1012` |
+| `Authorization` | **required** — HTTP 200 but `"Token missing"` |
+| `Content-type`, `Accept`, `X-UserType`, `X-ClientLocalIP`, `X-ClientPublicIP` | accepted when absent |
+
+**We still send all nine.** The enforced set is undocumented and could widen without
+notice; matching the official SDK costs a few bytes. The value of the measurement is
+diagnostic — when a request 400s, those four are where to look. Note the gateway's
+error text spells the MAC header `X-MACaddress`, differing in case from its own
+documentation; harmless, since HTTP header names are case-insensitive, but a hint
+that the validation list is hand-maintained.
+
+Also worth recording: a missing `Authorization` returns **HTTP 200** with
+`"Token missing"` in the body, not a 401. Any error handling that keys off the
+status code alone will read that as success. §4.4 must classify on the body's
+`status` field, not the HTTP code.
+
+### §3.3 refined: the idle timeout is 120s, and the server *does* pong
+
+The A/B test is unambiguous. Unpinged, the socket was closed at **t+120s** with
+close **code 1001**, reason **`"Connection Idle Timeout"`**. Pinged every 10s, it
+survived the full 180s window with no interruption.
+
+Two corrections to the spec:
+
+1. **120 seconds, not ~60.** The original figure would have led to a needlessly
+   aggressive keepalive.
+2. **Angel One does reply to pings.** Every `"ping"` is answered with a text
+   `"pong"`, and one arrives on connect before any ping is sent. The spec's claim
+   that "Upstox auto-ponged; Angel One does not" was wrong.
+
+The pong reply is more useful than it first appears: §5.4 can treat a missing pong
+as a liveness signal seconds after it should have arrived, rather than waiting out
+the full 120-second timeout. It also means the frame handler must discriminate on
+**type** — pongs are text, market data is binary — because a decoder that assumes
+every frame is a packet will try to parse `"pong"` as one.
+
+**A methodology note, because it nearly produced a false result.** The first run of
+this test held the unpinged arm for exactly 120s and scored it as "survived": the
+server's close arrived in the same tick the hold window expired, so the death was
+recorded after the arm had already been judged. The window is now 240s with a short
+grace period after it, and the arm returns early the moment death is observed. A
+test whose timing coincides with the phenomenon it measures is worse than no test —
+it reports a confident wrong answer.
+
+### New, undocumented: WebSocket connections are rate-limited
+
+Not in §3 at all, and it cost the most time today. Opening three sockets in quick
+succession gets the third refused with `HttpException: Connection closed before full
+header was received` — **the same error an unauthenticated handshake produces**.
+There is no 429, no `Retry-After`, and no distinguishing message.
+
+This was initially misread as a broken handshake, then as HTTP connection-pool
+interference. An ordering experiment settled it: a clean first connect succeeded, a
+connect immediately after an HTTP GET to the same host also succeeded, and only the
+third connection in the sequence failed. The variable is connection *count over a
+short window*, not the preceding request.
+
+Two consequences, now written into §3.3:
+
+1. **Reconnect must back off exponentially from the first retry.** A tight retry
+   loop is itself what keeps the socket shut, and it looks exactly like a
+   credential problem.
+2. **Never classify this error as fatal-auth.** Signing the user out — or discarding
+   the broker session — over throttling would turn a two-second delay into a full
+   re-login. Per the two-auth-systems rule, a broker hiccup must never touch the
+   Firebase session; this is a concrete case where a naive classifier would.
+
+`tool/03_ws_handshake.dart` accordingly no longer makes an HTTP probe before its
+handshake (the successful upgrade already proves there is no redirect, since Dart
+does not follow redirects during an upgrade), and it waits 20s before the negative
+test so a throttled rejection cannot masquerade as a credential rejection.
+
+### §3.1 confirmed: silent refresh works
+
+`generateTokens` accepts the `jwtToken` + `refreshToken` pair with **no TOTP** and
+returns a new JWT that differs from the old one and authenticates a real read-only
+request — verified by calling `getProfile` with it, not merely by checking it was
+non-empty. A fresh `feedToken` comes back too, so a reconnect after refresh has a
+valid token for the socket handshake. §5.6 can renew silently and never re-prompt
+mid-session.
+
+### §3.3 confirmed: no unsolicited frames
+
+A connected socket that has not subscribed receives nothing in 5s beyond the initial
+pong. Angel One sends no segment-status message, so market-open cannot be read off
+the socket — it must come from the clock, as §3.3 says.
+
+## 2026-09-10 — Recording container format for `feed_session.bin`
+
+Nothing in the spec pins down how the recorded session is stored, so:
+
+```
+file   := header record*
+header := magic "ANGLFEED" (8B) | version uint16 | reserved uint16
+record := epochMillis int64 | length uint32 | payload[length]
+```
+
+All little-endian, matching the feed itself. **Why store timestamps rather than just
+the packets:** the replay connection in §5.7 needs to reproduce *timing*, not only
+content. Conflation logic and any "is the feed stalled" watchdog are meaningless
+against packets replayed as fast as they can be read — the bursts and the idle gaps
+are the part worth keeping. Storing arrival time per record lets replay re-emit each
+payload after the original inter-arrival delay.
+
+Text frames (`"pong"`) are deliberately **not** recorded. They are transport
+keepalive, not market data, and a replay source should emit what the decoder
+consumes.
+
+The recorder subscribes to two tokens in one session — a near-ATM strike and a
+far-OTM one — so §3.5 trap 5 (one-sided or empty book) gets a real fixture rather
+than a hand-written one. If the far-OTM strike turns out not to trade at all during
+the capture, the script says so explicitly rather than silently producing a fixture
+that lacks the case it was meant to cover.
