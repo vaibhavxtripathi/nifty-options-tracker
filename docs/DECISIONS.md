@@ -479,3 +479,64 @@ authenticate a full trading account. Neither a `--dart-define` nor a bundled
 compiled-in string constant, trivially recoverable. The choice there is about
 which is *less bad* operationally, not about achieving secrecy, and the README
 security note is where that gets stated plainly.
+
+## 2026-09-10 — Phase 1 acceptance run, and the one criterion not fully verified
+
+Run against Firebase project `nifty-options-tracker-vt` on the `Medium_Phone`
+emulator (Android 16, API 36), from an installed debug APK rather than a
+`flutter run` session — force-stopping the app under `flutter run` kills the
+debug VM connection, so the relaunch test has to be done on a standalone
+install to mean anything.
+
+| §6 criterion | Result |
+|---|---|
+| register with email | **pass** — account created, guard redirected `/register` → `/home` |
+| log in with email | **pass** |
+| kill and relaunch, stay signed in | **pass** — force-stop, cold launch, straight to `/home`, no sign-in flash |
+| log out returns to auth | **pass** — back gesture then exits the app rather than re-entering `/home` |
+| invalid credentials renders | **pass** — "Incorrect email or password." |
+| email already in use renders | **pass** |
+| weak password renders | **pass** — caught client-side before the round trip |
+| network failure renders | **pass** — radios off, "No connection.", mapped to `NetworkFailure` not `AuthFailure` |
+| cancelling the picker shows nothing | **partial** — see below |
+| sign in with Google | **not verified** — see below |
+
+Gates: `flutter analyze` clean including warnings, 31 tests green,
+`dart analyze tool/` clean, and `.env` / `tool/.session.json` /
+`google-services.json` all confirmed still ignored.
+
+**The invalid-credentials error appeared immediately.** Worth stating because it
+is the production-side confirmation of the Riverpod 3 retry finding recorded
+above: had sign-in been a `FutureProvider`, this would have been a spinner for
+about twelve seconds followed by nothing useful.
+
+### Google Sign-In could not be completed, and why that is a device limit
+
+Tapping "Continue with Google" launches the Play Services flow correctly — the
+`serverClientId` and the registered debug SHA-1 are both being accepted, since a
+wrong value fails earlier and differently. But the flow then ends on Google's own
+"We weren't able to check for accounts connected to your phone number", because
+**the emulator has no Google account added to Android** (`dumpsys account`
+returns nothing). There is no account for a picker to offer.
+
+This is a device provisioning gap, not an app defect, and it cannot be scripted:
+adding an account needs a real Google password typed into the device.
+
+What *was* verified from it: abandoning that flow and returning to the app leaves
+**no error banner and no stuck spinner** — the sign-in screen is clean. That is
+the behaviour §5.2 requires of a cancellation, and the cancellation path itself
+is covered by a unit test asserting `GoogleSignInExceptionCode.canceled` produces
+no failure and clears `isSubmitting`.
+
+What remains unproven on a real device: that a *completed* Google sign-in yields
+a non-null `idToken` and a Firebase session. The idToken-only credential path is
+verified against the package source and by the assert in
+`GoogleAuthProvider.credential`, but source-reading is not a device run, and this
+is exactly the place §5.2 warns the Android/Web client ID mix-up shows up.
+
+**To close this out**, add a Google account to the emulator (Settings → Passwords
+& accounts → Add account) or run on a physical device, then repeat: tap Continue
+with Google, dismiss the picker once — expect no banner — then complete it and
+expect `/home`. Recorded rather than quietly marked pass, because "signs in with
+Google" is a §6 acceptance criterion and an unverified pass is worse than a
+stated gap.
