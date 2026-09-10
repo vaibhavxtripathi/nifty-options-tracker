@@ -542,3 +542,207 @@ and no stuck spinner. It is also covered by a unit test asserting
 **Note for Phase 6.** The demo recording has to be made on a device with a Google
 account signed in, or the Google path cannot be shown at all. Worth knowing
 before setting up a recording rather than during it.
+
+## 2026-09-10 — Phase 2: `AppChrome` is a sealed variant, not `showNav`
+
+§5.1 sketched the template as
+`AppTemplate({title, body, actions, showNav = true})`, with the auth screens
+passing `showNav: false`. Building it revealed that the boolean cannot express
+what the app needs.
+
+The spec also requires "a logout action present on every screen **by
+construction**". But Phase 2 folds the splash and both auth screens into the
+same template, and a logout button on the sign-in screen is nonsense — there is
+nobody signed in to log out. So the template must vary two things
+independently, which with booleans means `showNav` plus `showLogout`: four
+states, of which only three are meaningful, and the meaningless fourth
+("no nav, but do show logout") stays permanently representable.
+
+Worse, "by construction" quietly becomes "by convention" — if logout is a flag,
+a screen can forget to set it, which is exactly the failure that phrase exists
+to rule out.
+
+So chrome is a sealed hierarchy instead:
+
+- `NoChrome` — splash. No app bar at all, because a screen whose entire job is
+  to decide nothing must not flash chrome before the router picks a
+  destination.
+- `BareChrome` — sign-in, register. A title, and **no way to ask for a logout
+  action**; the variant simply has no such field.
+- `SignedInChrome` — search, and Phase 4's detail screen. Appends the logout
+  button *itself*, after any screen-specific actions. No caller passes it and no
+  caller can suppress it.
+
+That last point is the whole argument. "Every signed-in screen has logout" is
+now enforced by the type rather than remembered by the author, and the invalid
+combination is unspeakable rather than merely unused. It also matches how
+`AuthState` and `AppFailure` are already modelled, so a `switch` over chrome
+stays exhaustiveness-checked — adding a fourth variant later becomes a compile
+error in the template rather than a silently missing app bar.
+
+`_LogoutAction` reads the auth controller directly rather than taking a
+callback, for the same reason: a callback is one more thing a screen could
+supply wrongly, or not at all.
+
+**Verified, not assumed.** `test/architecture_test.dart` now asserts that
+`Scaffold(` is constructed in exactly one file and that the file is
+`template.dart`. That turns §6's `grep -rn "Scaffold" lib/` acceptance criterion
+from something true on the day it was checked into something that fails the
+build if it stops being true. It was checked for vacuity by temporarily adding a
+second `Scaffold` to the search screen and confirming it went red — the same
+discipline applied to the domain-purity test in Phase 1.
+
+## 2026-09-10 — Cache invalidation is a boundary crossing, not an age
+
+§3.2 says the instrument master is republished daily at ~08:30 IST, and §5.3
+says to invalidate against that boundary. The obvious reading — "refetch if the
+cache is more than 24 hours old" — is wrong in **both** directions, so the rule
+is expressed as a boundary crossing instead:
+
+> The cache is stale exactly when the most recent 08:30 IST publication at or
+> before *now* falls after the moment the cache was written.
+
+The two cases an age-based rule gets backwards, both of which now have tests:
+
+- **A 31-minute-old cache can be stale.** Written at 08:00 IST, it holds
+  *yesterday's* file. At 08:31 a new file exists and the cached one is a day
+  behind — but an age rule calls it fresh and serves stale contracts all day.
+- **A 14-hour-old cache can be fresh.** Written at 09:00 IST, it holds today's
+  file and stays correct until tomorrow morning. An age rule would refetch
+  32.5 MB at 23:00 to obtain a byte-identical result.
+
+`isStale` and `lastRefreshBoundary` are pure functions with the clock passed in,
+so both edges are testable without waiting for a real 08:30 to come around. IST
+is UTC+05:30 with no daylight saving, so a fixed offset is correct year-round
+and the app needs no timezone database.
+
+**Two related choices.** The cache stores *already-mapped domain data* — rupee
+strikes, ISO expiries — not raw broker rows, so the §3.2 hazards are resolved
+once at the mapping boundary and cannot re-enter through a cache read. And it
+carries a `schemaVersion`: a file written by an older build is discarded and
+refetched rather than parsed into something subtly wrong, because a cache that
+crashes on upgrade is a bad first launch.
+
+**A stale cache beats an empty screen.** If the refetch fails but a stale cache
+exists, the stale list is served. Contracts change once a day and only at the
+edges, so yesterday's list is overwhelmingly still correct; refusing to show it
+because the network blipped would be strictly worse for the user.
+
+## 2026-09-10 — The retry decision, made per provider rather than inherited
+
+The Phase 1 entry above ends by noting that Riverpod 3's automatic retry is
+right for *idempotent reads that fail transiently* and wrong for *anything a
+user is waiting on that failed because their input was wrong*, and says to carry
+that into later phases. Phase 2 is the first place both kinds appear in one
+file, so the decision is recorded per provider rather than inherited by
+accident.
+
+- **`contractsProvider` keeps the default retry, deliberately.** It reads a
+  public 32.5 MB file over HTTP. Nothing the user typed can make it fail; the
+  failures are transient — a flaky connection, a CDN hiccup — and an identical
+  retry is exactly the right response. The user is not waiting on a decision
+  they made, so backing off and trying again costs them nothing.
+- **`searchResultsProvider` is a plain `Provider`.** Filtering an in-memory list
+  is synchronous and cannot fail, so there is nothing to await and nothing that
+  could ever be worth retrying.
+
+This is the mirror image of `AuthController`, and the contrast is the point: the
+same framework default is correct in one place and actively harmful in the
+other. Inheriting it silently in either direction would be the bug.
+
+**No debounce on the search field**, for a related reason. Debouncing exists to
+avoid firing a request per keystroke, and §5.3 is explicit that there is no
+request here to fire — the search is a synchronous filter over ~1,600 records
+already in memory. A debounce would add lag to solve a problem the architecture
+had already removed.
+
+## 2026-09-10 — Phase 2 dependencies: `path_provider` and `dart:io`
+
+Two choices worth stating, both taken to keep the dependency surface small.
+
+**`path_provider` was added; it is the only new package in Phase 2.** §6's
+"second launch uses cache with no network call" needs somewhere durable to
+write, and nothing in `dart:io` can locate the Android app documents directory
+without a platform channel. `shared_preferences` was rejected: it is a key/value
+store, and putting a ~200 KB serialised list into one of its values is off-label
+use that buys nothing over a file.
+
+**The fetch uses `dart:io`'s `HttpClient` rather than `package:http`.**
+`package:http` is already resolved transitively via Firebase, so promoting it
+would have downloaded nothing — but `dart:io` is what Phase 0 step 2 already
+proved against this exact endpoint, and Phase 3's WebSocket is `dart:io` too, so
+the data layer stays on one networking stack. The testability argument for
+`package:http` does not apply here either: the seam a test overrides is
+`InstrumentMasterClient`, not the HTTP library beneath it.
+
+`InstrumentMasterClient` exists as an interface for exactly one reason worth
+naming — it lets a test **count fetches**. "Uses the cache with no network call"
+is an assertion about something *not* happening, and a call count is the only
+way to state that as a test rather than as an observation. It is the same
+regression-guard shape Phase 1 used to pin the Riverpod retry behaviour.
+
+## 2026-09-10 — Why the parser is a top-level function taking a String
+
+`parseNiftyOptions` takes the raw JSON string and returns finished domain
+objects, which looks like an awkward signature until you see what it is shaped
+for: it is the function handed to `compute()`.
+
+`compute()` spawns a background isolate and copies values across the boundary,
+so the signature determines what gets copied. Taking the raw string and
+filtering *inside* the isolate means the 32.5 MB payload and the 145,599
+intermediate maps never leave it — only the ~1,600 surviving `OptionContract`s
+are copied back. Decoding in the isolate but filtering after it would copy all
+145k objects across and defeat the entire exercise.
+
+That is also why every function in the file is pure and top-level with no
+Flutter import: an isolate entry point cannot close over state, and the purity
+is what makes the four §3.2 hazards testable against the recorded fixture with
+no network and no device.
+
+**A malformed row is skipped, not fatal.** One bad record out of 145,599 must
+not empty the search screen, and the broker adds instrument types without
+notice. But an *empty* result after filtering is treated as an error rather than
+as "no matches": that means the §3.2 filter stopped matching, which is a schema
+change, and failing loudly beats a search screen that silently returns nothing
+forever.
+
+## 2026-09-10 — Phase 2 acceptance run: all §6 criteria pass
+
+Run on the `Medium_Phone` emulator (Android 16, API 36) from an installed debug
+APK rather than a `flutter run` session, for the reason Phase 1 recorded:
+force-stopping the app under `flutter run` kills the debug VM connection, so a
+relaunch test done that way proves nothing.
+
+| §6 criterion | Result |
+|---|---|
+| `grep -rn "Scaffold" lib/` matches only `template.dart` | **pass** — one construction site, in `template.dart`; also asserted by `architecture_test.dart` |
+| searching a strike returns correctly sorted results | **pass** — `21900` returned that strike only, ordered 15 Sep → 22 Sep → 29 Sep → 6 Oct → 13 Oct, CE before PE at each |
+| nearest expiry marked | **pass** — only the 15 Sep pair carried the "Nearest" chip; the four later expiries were correctly unmarked |
+| empty-result state renders | **pass** — "No contracts match that search." with guidance, not an error |
+| second launch uses cache with no network call | **pass** — see below |
+| logout reachable from the search screen | **pass** — returns to sign-in, and the back gesture does not re-enter |
+
+Gates: `flutter analyze` clean including warnings, 78 tests green (31 from
+Phase 1 plus 47 new), `dart analyze tool/` clean.
+
+**The cache criterion was proven in airplane mode, not by reading a log.** The
+app was force-stopped, the radios were disabled *and* airplane mode enabled, and
+only then cold-launched. The full contract list rendered. With no network there
+is no fetch that could have succeeded, so the list can only have come from disk
+— which is a stronger claim than any log line, since a log line proves what the
+code *believed* it did.
+
+The cache file confirms the isolate-filtering decision materially: 242 KB on
+disk, against the 32.5 MB that was fetched. Only the filtered, already-mapped
+contracts are persisted, exactly as intended.
+
+**The device run exercised real data, not the fixture.** The 590-contract
+Phase 0 fixture holds three expiries; the live app fetched and displayed five,
+including 6 Oct and 13 Oct 2026. So the `DDMMMYYYY` parser, the ÷100 strike and
+the CE/PE derivation were all confirmed against the full live instrument master
+on-device, not only against the recorded slice the unit tests use.
+
+**One thing worth noting for Phase 4.** The search screen currently renders
+every contract when the query is blank — 1,588 rows through a `ListView.builder`,
+which is lazy and showed no jank. If the detail screen later wants a heavier row,
+this is the point to check again rather than assume.
