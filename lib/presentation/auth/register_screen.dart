@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
+import '../shared/template.dart';
 import 'auth_controller.dart';
 import 'widgets/auth_error_banner.dart';
 
@@ -37,10 +38,11 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     final state = ref.watch(authControllerProvider);
     final busy = state.isSubmitting;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Create account')),
-      body: SafeArea(
-        child: Center(
+    return AppTemplate(
+      // Reached while signed out, so the variant that has no logout action.
+      chrome: const BareChrome(title: 'Create account'),
+      padded: false,
+      body: Center(
           child: SingleChildScrollView(
             padding: AppTheme.pagePadding,
             child: ConstrainedBox(
@@ -90,7 +92,6 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             ),
           ),
         ),
-      ),
     );
   }
 }

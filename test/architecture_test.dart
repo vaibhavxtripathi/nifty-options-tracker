@@ -109,6 +109,38 @@ void main() {
     });
   });
 
+  group('the template owns all chrome', () {
+    // §6 Phase 2 lists `grep -rn "Scaffold" lib/` matching only
+    // template.dart as an acceptance criterion. Asserting it here makes it a
+    // permanent guard rather than something that was true once, on the day it
+    // was checked.
+    test('Scaffold is constructed in exactly one file, and it is the template',
+        () {
+      // Files rather than 'path:line' strings: a Windows path carries a
+      // drive-letter colon, so splitting one back apart is a trap.
+      final offenders = <String>{};
+      for (final file in _dartFilesIn('lib')) {
+        for (final line in file.readAsStringSync().split('\n')) {
+          // A doc comment may name Scaffold; only construction counts.
+          final trimmed = line.trimLeft();
+          if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
+          if (RegExp(r'\bScaffold\s*\(').hasMatch(line)) {
+            offenders.add(file.path.replaceAll('\\', '/'));
+          }
+        }
+      }
+
+      expect(
+        offenders,
+        {'lib/presentation/shared/template.dart'},
+        reason:
+            'Screens supply a body; the template owns the chrome. A Scaffold '
+            'anywhere else means a screen that can drift on padding, '
+            'background, or the presence of a logout button.',
+      );
+    });
+  });
+
   group('hard prohibitions', () {
     test('no order placement or mutating broker endpoint anywhere in lib/', () {
       final forbidden = RegExp(

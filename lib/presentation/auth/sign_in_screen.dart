@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/routes.dart';
 import '../../app/theme.dart';
+import '../shared/template.dart';
 import 'auth_controller.dart';
 import 'widgets/auth_error_banner.dart';
 
@@ -44,9 +45,13 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     final controller = ref.read(authControllerProvider.notifier);
     final busy = state.isSubmitting;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
+    return AppTemplate(
+      // Signed out: [BareChrome] is the variant that cannot offer a logout
+      // action. The screen renders its own centred heading, so the bar shows
+      // no title rather than repeating it.
+      chrome: const BareChrome(title: 'Sign in', showTitle: false),
+      padded: false,
+      body: Center(
           child: SingleChildScrollView(
             padding: AppTheme.pagePadding,
             child: ConstrainedBox(
@@ -113,7 +118,6 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
             ),
           ),
         ),
-      ),
     );
   }
 }
