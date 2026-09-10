@@ -6,7 +6,7 @@ import '../presentation/auth/auth_providers.dart';
 import '../presentation/auth/register_screen.dart';
 import '../presentation/auth/sign_in_screen.dart';
 import '../presentation/auth/splash_screen.dart';
-import '../presentation/home/home_screen.dart';
+import '../presentation/search/search_screen.dart';
 import 'routes.dart';
 
 /// The app router, with the auth guard.
@@ -43,7 +43,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: Routes.home,
-        builder: (_, _) => const HomeScreen(),
+        builder: (_, _) => const SearchScreen(),
       ),
     ],
   );

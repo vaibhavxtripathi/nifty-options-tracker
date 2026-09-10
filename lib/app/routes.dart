@@ -8,6 +8,7 @@ final class Routes {
   static const String splash = '/';
   static const String signIn = '/sign-in';
   static const String register = '/register';
+  /// The signed-in landing screen: contract search.
   static const String home = '/home';
 
   /// Routes reachable while signed out.
