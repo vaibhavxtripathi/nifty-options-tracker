@@ -18,6 +18,11 @@ dependencies:
   flutter_riverpod: ^3.4.3
   go_router: ^18.0.1
 
+  # A writable directory for the contract cache. Nothing in dart:io can locate
+  # the app's documents directory on Android without a platform channel, and
+  # "second launch uses cache with no network call" needs somewhere durable.
+  path_provider: ^2.1.5
+
   # HMAC-SHA1 for local RFC-6238 TOTP generation (Phase 3), and required now by
   # the Phase 0 verification scripts under tool/.
   crypto: ^3.0.7
