@@ -63,8 +63,16 @@ app.*.map.json
 /android/app/release
 .widget_preview/
 
-# FlutterFire: generated, but regenerable and not a secret store.
-# google-services.json stays ignored above.
+# FlutterFire: generated, and regenerable via `flutterfire configure`.
+#
+# firebase_options.dart embeds the same Firebase Android API key as
+# google-services.json above. Google's own model treats that key as
+# client-identifying rather than secret (it's meant to ship inside every
+# Android/iOS app), but it was committed here before that key had been
+# restricted in Google Cloud Console to this app's package + SHA-1 and to
+# only the Firebase Auth API — so treat it the same as google-services.json
+# above and keep both out of version control regardless.
+lib/firebase_options.dart
 
 # Local Claude Code settings — tooling, not app config
 .claude/

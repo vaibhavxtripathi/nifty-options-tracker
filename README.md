@@ -153,6 +153,20 @@ no code path that owns it.
 3. Register your debug **SHA-1 *and* SHA-256** fingerprints, then re-download.
 4. The `serverClientId` must be the **Web** client ID, not the Android one —
    the Android ID yields a null `idToken` with no useful error.
+5. Generate `lib/firebase_options.dart` (gitignored — see below) with the
+   [FlutterFire CLI](https://firebase.google.com/docs/flutter/setup):
+   ```bash
+   dart pub global activate flutterfire_cli
+   flutterfire configure
+   ```
+
+Both `google-services.json` and `firebase_options.dart` are gitignored even
+though the key inside them is Google's client-identifying kind, not a secret
+meant to be kept private — the fix for that key is restricting it in
+**Google Cloud Console → APIs & Services → Credentials** to this app's package
+name + SHA-1 and to only the APIs it needs, not keeping the file off disk.
+They're excluded anyway so a clone never ships one project's identifiers by
+accident.
 
 ### Configuration
 
