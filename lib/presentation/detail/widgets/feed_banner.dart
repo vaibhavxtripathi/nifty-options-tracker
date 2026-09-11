@@ -13,14 +13,37 @@ import '../format.dart';
 /// that will be missed. So it is pinned above the content and cannot be
 /// dismissed.
 class FeedBanner extends StatelessWidget {
-  const FeedBanner({required this.source, this.tick, super.key});
+  const FeedBanner({
+    required this.source,
+    this.tick,
+    this.isStale = false,
+    super.key,
+  });
 
   final FeedSource source;
   final MarketTick? tick;
 
+  /// The stream is not currently delivering — backgrounded, reconnecting, or
+  /// still opening. The values on screen are the last known ones.
+  ///
+  /// Worth surfacing rather than hiding: a screen showing a price that stopped
+  /// updating looks identical to one showing a price that has not moved, and
+  /// on a trading screen those are very different facts.
+  final bool isStale;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    if (isStale) {
+      return _Bar(
+        icon: Icons.pause_circle_outline,
+        background: theme.colorScheme.surfaceContainerHighest,
+        foreground: theme.colorScheme.onSurfaceVariant,
+        label: 'PAUSED',
+        detail: 'Showing the last known values · not updating',
+      );
+    }
 
     return switch (source) {
       LiveFeed() => _Bar(

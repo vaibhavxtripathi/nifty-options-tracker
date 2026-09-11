@@ -8,6 +8,7 @@ import '../../domain/entities/option_contract.dart';
 import '../search/search_providers.dart';
 import '../shared/template.dart';
 import 'detail_providers.dart';
+import 'feed_lifecycle.dart';
 import 'widgets/book_panel.dart';
 import 'widgets/feed_banner.dart';
 import 'widgets/price_header.dart';
@@ -20,13 +21,39 @@ import 'widgets/stat_grid.dart';
 ///
 /// Supplies a body to [AppTemplate] and builds no `Scaffold`, so logout is
 /// present here by construction.
-class DetailScreen extends ConsumerWidget {
+class DetailScreen extends ConsumerStatefulWidget {
   const DetailScreen({required this.token, super.key});
 
   final String token;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DetailScreen> createState() => _DetailScreenState();
+}
+
+class _DetailScreenState extends ConsumerState<DetailScreen> {
+  FeedLifecycle? _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    // §5.4: stop streaming to a screen nobody is looking at, and reconnect on
+    // resume. Without this the OS suspends the process on its own schedule and
+    // the socket returns as a mystery disconnect rather than a known path.
+    _lifecycle = FeedLifecycle(
+      onPause: () => ref.read(feedPausedProvider.notifier).pause(),
+      onResume: () => ref.read(feedPausedProvider.notifier).resume(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final token = widget.token;
     final contract = ref
         .watch(contractIndexProvider)
         .value
@@ -43,15 +70,27 @@ class DetailScreen extends ConsumerWidget {
           // Always visible, never dismissible: data that looks live but is not
           // is worse than no data, so the provenance is part of the screen
           // rather than a toast that disappears.
-          FeedBanner(source: source, tick: tick.value),
+          FeedBanner(
+            source: source,
+            tick: tick.value,
+            // Loading with a value already on screen means the stream stopped
+            // delivering rather than never having started.
+            isStale: tick.isLoading && tick.value != null,
+          ),
           Expanded(
-            child: switch (tick) {
-              AsyncData(:final value) => _Body(
+            // `tick.value` rather than a match on AsyncData: a reconnect or a
+            // background pause puts the provider back into loading, and
+            // blanking a price screen to a spinner every time the socket
+            // blinks would be worse than briefly showing a value that is a
+            // few seconds old. The last known tick stays up, and the banner
+            // above says whether it is still current.
+            child: switch ((tick, tick.value)) {
+              (_, final MarketTick value) => _Body(
                 tick: value,
                 contract: contract,
                 source: source,
               ),
-              AsyncError(:final error) => _FeedError(error: error),
+              (AsyncError(:final error), _) => _FeedError(error: error),
               _ => const Center(child: CircularProgressIndicator()),
             },
           ),

@@ -61,6 +61,23 @@ final feedConnectionProvider = Provider<FeedConnection>((ref) {
   return connection;
 });
 
+/// Whether the feed is paused because the app is in the background (§5.4).
+///
+/// A provider rather than local widget state so the tick stream can watch it:
+/// flipping this rebuilds [tickProvider], which tears the subscription down on
+/// pause and re-establishes it on resume through the same code path as any
+/// other rebuild. No separate teardown logic to keep in step.
+final feedPausedProvider = NotifierProvider<FeedPaused, bool>(FeedPaused.new);
+
+final class FeedPaused extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void pause() => state = true;
+
+  void resume() => state = false;
+}
+
 /// Ticks for one instrument.
 ///
 /// **`autoDispose.family` is the load-bearing reason for Riverpod here** (§4.3).
@@ -77,6 +94,13 @@ final tickProvider = StreamProvider.autoDispose.family<MarketTick, String>((
   token,
 ) {
   final source = ref.watch(feedSourceProvider);
+
+  // Backgrounded: emit nothing and hold no socket. Watching this here means
+  // the teardown runs through the provider's own dispose rather than through
+  // a second path that could drift out of step with it.
+  if (ref.watch(feedPausedProvider)) {
+    return const Stream<MarketTick>.empty();
+  }
 
   return switch (source) {
     // A misconfiguration is surfaced, never quietly replaced by replay. The
