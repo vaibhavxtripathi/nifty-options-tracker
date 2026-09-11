@@ -746,3 +746,241 @@ on-device, not only against the recorded slice the unit tests use.
 every contract when the query is blank — 1,588 rows through a `ListView.builder`,
 which is lazy and showed no jank. If the detail screen later wants a heavier row,
 this is the point to check again rather than assume.
+
+## 2026-09-11 — Phase 0 completed: steps 6 and 7 captured live
+
+The market reopened and the last two Phase 0 steps ran in-window, closing the
+only dependency in the project that could not be manufactured at any other
+hour.
+
+**Step 6 verified every §3.4 offset against a live packet.** 379 bytes exactly,
+mode 3, exchange type 2, and the 25-byte null-padded token round-tripped to
+`"57379"`. All required fields populated.
+
+The ÷100 divisor is confirmed by something better than a plausible-looking
+number: **the offsets corroborate each other.** The decoded LTP of ₹10.60 sat
+between the best bid (₹10.70) and the day's low (₹8.15), with a coherent
+five-deep book either side and a ₹0.10 spread. A wrong divisor would have to be
+wrong identically at offsets 43, 91–115 and 147+ to produce that consistency,
+which is not how a single misplaced constant fails.
+
+**Step 7 recorded `test/fixtures/feed_session.bin`** — 141 SNAP_QUOTE packets
+over 180 seconds of real wall clock, 53.9 KB, verified to read back record-for-
+record. The file was scanned for credential material before committing: zero
+ASCII runs of 12 characters or more, every record mode-3 market data.
+
+### The one-sided book could not be captured, and that is a finding
+
+§3.5 trap 5 says an illiquid strike may have no resting orders on a side at all.
+Step 7's "illiquid" pick produced a 4-buy/5-sell book — uneven, but not empty.
+
+So a second script, `tool/08_record_thin.dart`, subscribed five deep strikes at
+once — 15000PE, 16500PE, 18000PE, 31500CE and 34500CE, roughly 40% out of the
+money — and kept only packets with an empty side. Over two minutes it saw
+thirteen packets and kept **none**: every one of those strikes was quoted
+five-deep on both sides.
+
+That is worth recording rather than working around. Nifty index options are
+liquid enough that a fully one-sided book is rare intraday; it is a near-expiry
+and auction phenomenon, not an everyday one. The decoder must still handle it —
+it does, and `tick_decoder_test.dart` covers it — but with **synthetic packets,
+and the test says so in a comment**. Claiming fixture coverage that does not
+exist would be worse than the gap.
+
+## 2026-09-11 — The tick decoder, and how it avoids being confidently wrong
+
+The highest-risk file in the project, for a reason that is easy to state and
+easy to underestimate: Upstox would have sent Protobuf and `protoc` would have
+written this file. Angel One sends raw little-endian bytes at fixed offsets, so
+every field is hand-written and **a wrong offset does not throw**. It produces a
+plausible number and poisons everything downstream silently.
+
+Three things defend against that, and only the third is unusual.
+
+1. **Offsets are named constants carrying the §3.4 table in a doc comment.** A
+   bare `getInt64(115)` is unreviewable; `_Offsets.close` next to the table is
+   checkable in seconds. Unused offsets were deleted rather than kept "for
+   completeness" — a constant nothing reads is one that can drift out of step
+   with the wire format without anything noticing.
+
+2. **The tests decode the real recording**, not packets written by the same
+   person who wrote the decoder. That distinction is the whole point: a
+   synthetic-only test proves the author is self-consistent, not that the
+   offsets match what Angel One sends. Both would encode the same
+   misunderstanding.
+
+3. **The expected values were extracted by an independent script.** Before
+   writing a single assertion, the fixture was read with a short Python program
+   that knows nothing about the Dart code, and the test asserts *those* numbers.
+   Had the Dart decoder been used to generate its own expectations, the test
+   would have asserted only that the decoder is deterministic.
+
+**Verified non-vacuous.** Shifting the `close` offset by 8 bytes — one field,
+the kind of error this file exists to prevent — turns three tests red. A decoder
+test that cannot fail is worse than none, because it manufactures confidence in
+precisely the place confidence is least warranted.
+
+`close == 0 → null` lives on the entity rather than in the decoder, because it
+is a property of the domain rather than of the wire format, and the nullable
+return type is what forces every render site to decide what to show. The test
+includes a vacuity check that the unguarded arithmetic really does produce a
+non-finite double.
+
+## 2026-09-11 — The book is scanned by flag, not by position
+
+§3.4 says best-five entries 0–4 are buys and 5–9 are sells, and every packet in
+the recording honoured that. The decoder reads the flag anyway.
+
+The reasoning is that the flag is what the *protocol* defines as authoritative,
+while the ordering is what the *server happened to send today*. An illiquid
+strike is simultaneously where a surprising layout is most likely to appear and
+the case nobody checks by hand — so trusting position would be reading the
+layout instead of the data, in exactly the situation where they might differ.
+
+A test puts the only sell in slot 0 and the only buy in slot 9 and asserts both
+are read correctly. It fails immediately against a position-based decoder, which
+is what makes the choice defensible rather than merely cautious.
+
+Best bid is the **highest** buy and best ask the **lowest** sell, rather than
+the first of each. Taking the first would reintroduce the same dependence on
+server ordering that the flag scan exists to remove.
+
+## 2026-09-11 — Three Phase 0 findings, turned into code
+
+The feed connection is shaped by measurements rather than by the spec's original
+text, and each one would be a bug if ignored.
+
+**Backoff starts at the first retry, not after a few failures.** Phase 0 found
+that opening sockets in quick succession gets refused — and that the refusal is
+`HttpException: Connection closed before full header was received`, *the same
+error an unauthenticated handshake produces*. There is no 429 and no
+`Retry-After`. So a tight retry loop is not merely impolite; it is the thing
+keeping the socket shut, while looking exactly like a credential problem. A test
+asserts no immediate retry happens.
+
+**That error is classified retryable, never fatal-auth.** This is the
+highest-consequence line in the file. Mapping throttling onto a credential
+failure would discard the broker session over a two-second delay, turning it
+into a full re-login — and under the two-auth-systems rule a broker failure must
+never be able to reach the app's sign-out. Two tests pin it: the throttle string
+produces `FeedReconnecting`, and a genuine 401 produces `BrokerAuthFailure` and
+explicitly *not* `AuthFailure`.
+
+**Frames are discriminated by type, not content.** The server replies `"pong"`
+as text and sends one on connect before any ping is sent. Market data is binary.
+A handler assuming every frame is a packet would try to parse `"pong"` as one.
+
+**The staleness watchdog is gated on the clock**, because Angel One sends no
+segment-status frame. A quiet socket at 16:00 is a closed market, not a dead
+connection, and reconnecting on that would be a retry loop that cannot succeed —
+straight into the rate limit for nothing. Both sides of the gate are tested with
+an *advancing* fake clock; a frozen one would make the market-closed case pass
+because no time appeared to elapse rather than because the gate held, which is a
+test passing for the wrong reason.
+
+## 2026-09-11 — Conflation, and a subscription leak it found
+
+§5.7: ingest every tick, render at ~10 Hz. **Conflate, do not debounce.** A
+debounce waits for a quiet gap, and under a live feed that gap never arrives —
+the screen would appear frozen during exactly the bursts a trader cares about.
+Conflation emits the newest value on a schedule instead, so the render rate is
+bounded and the displayed value is never stale by more than one interval. A test
+drives continuous traffic at 20 ms intervals and asserts the screen keeps
+updating, which is the case a debounce fails outright.
+
+**Conflation is lossless *here specifically*, and the qualifier is the
+interesting part.** Every SNAP_QUOTE packet is a complete snapshot rather than a
+delta, so the newest tick contains everything a dropped one did. If this app
+ever built candles or VWAP it would have to process every tick and conflate only
+at the render boundary. The distinction is the difference between a safe
+optimisation and silent data loss.
+
+The first tick is emitted immediately rather than waiting out an interval: on
+opening a screen, a 100 ms blank reads as "still loading" rather than "live", and
+there is nothing to conflate when only one value has arrived.
+
+**The lifecycle test found a real bug.** `stop()` awaited the upstream
+subscription's cancellation *before* sending the unsubscribe frame, and that
+future did not resolve — so the frame was never sent. In production that meant
+every back-navigation leaving the server streaming a token nobody was reading:
+precisely the socket leak §5.4 warns about, and one that "open Detail,
+immediately pop, repeat rapidly" in Phase 5 would have surfaced as a mystery.
+
+The fix stops the local side synchronously, then awaits the in-flight
+*subscribe* before unsubscribing — because backing out faster than the subscribe
+completes would otherwise make the removal a no-op, after which the subscribe
+would land and stream forever. Tying the subscription to the stream's lifetime
+is what makes "cleanly closed" structural; this bug is a reminder that
+structural still has to be tested.
+
+## 2026-09-11 — Config: two classes, and an honest security note
+
+Phase 1 deferred the broker-credential decision to Phase 3. The answer is
+`--dart-define`, in a **`BrokerConfig` separate from `AppConfig`**.
+
+The separation is the two-auth-systems rule made structural. A single config
+class holding both the Google client ID and the Angel One credentials would be
+exactly the cross-reference CLAUDE.md forbids: any file wanting the client ID
+would also hold a trading credential, and the architecture test that scans the
+auth layer for broker vocabulary would need exceptions. Two classes cost one
+file.
+
+**The security position, stated plainly because the honest answer is
+uncomfortable.** These credentials authenticate a *full trading account* — Angel
+One issues no read-only market-data credential, which is the single biggest
+thing lost in the move from Upstox. Neither `--dart-define` nor a bundled `.env`
+protects them from anyone holding the APK: a dart-define is a compiled-in string
+recoverable with `strings`, and a `.env` asset is a file recoverable by
+unzipping. **Neither is encryption and neither should be described as security.**
+
+`--dart-define` wins on operational grounds only: it cannot be committed by
+accident, and it keeps credentials out of the asset bundle so no runtime code
+path or crash reporter can pick them up. The app is read-only *by construction*
+and a test fails the build on any mutating endpoint — but that is a property of
+this code, not of the credential. The README is where this gets said to a
+reader rather than to a compiler.
+
+An unconfigured build still runs: auth and contract search work without broker
+credentials, and only the feed is unavailable. A hard failure would make the app
+unlaunchable for a reviewer who has no Angel One account.
+
+## 2026-09-11 — TOTP is tested against the RFCs, not against itself
+
+Every other test in this project compares our code to our fixture or our
+reasoning. The TOTP tests compare it to RFC 4226 and RFC 6238 — published ground
+truth that exists entirely independently of this implementation. All ten HOTP
+vectors and all five SHA-1 TOTP vectors pass.
+
+That is worth the effort because a broken TOTP presents as `AB1050 Invalid totp
+and client combination`, which is indistinguishable from a wrong secret, a
+rotated secret, or an account with no TOTP registered. Phase 0 lost real time to
+exactly that ambiguity and resolved it only by ruling the arithmetic out first.
+These tests make that a permanent, instant answer rather than an investigation.
+
+Two smaller choices follow from the same instinct. `generateHotp` is separated
+from `generateTotp` so the counter-based RFC vectors can be asserted directly
+rather than through a timestamp. And the base32 decoder reports the *position*
+of an invalid character, never the character — because the character is part of
+a secret, and an error message is a thing that gets logged.
+
+The login path waits for the next time step when the current one has under three
+seconds left. A code that expires mid-flight fails as `AB1050`, so two seconds of
+latency buys the removal of an ambiguity that costs far more.
+
+## 2026-09-11 — Phase 3 acceptance: all §6 criteria met
+
+| §6 criterion | Result |
+|---|---|
+| unit tests decode the recorded fixture into correct `MarketTick`s | **pass** — all 141 packets, with values read out by an independent script |
+| a known packet decodes to the Phase 0 LTP, proving ÷100 | **pass** — ₹10.75, corroborated by the book and day range |
+| `close == 0` yields a null percent change | **pass** — plus a vacuity check that the unguarded maths is non-finite |
+| a short packet is rejected rather than read past its end | **pass** — truncated, 51-byte LTP-mode, empty, and wrong-mode all rejected |
+| a one-sided book yields a null `BookLevel` | **pass** — synthetic by necessity; see the step 7b finding above |
+| a fake socket proves backoff, the 10s ping, and resubscribe | **pass** — 15 tests under a fake clock |
+| replay emits ticks with realistic timing | **pass** — recorded gaps reproduced within 2 ms, with a guard proving the gaps are genuinely uneven |
+| no Flutter import anywhere in `data/broker/` | **pass** — asserted by `architecture_test.dart` |
+
+Gates: `flutter analyze` clean including warnings, **175 tests** green (95 of
+them new in this phase), `dart analyze tool/` clean.
+
+No UI work, per §6. The detail screen is Phase 4.
