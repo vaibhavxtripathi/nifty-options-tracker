@@ -141,6 +141,59 @@ void main() {
     });
   });
 
+  group('the broker layer is framework-free', () {
+    // §6 Phase 3 acceptance: "no Flutter import anywhere in data/broker/".
+    //
+    // The reason is testability rather than purity for its own sake. The feed
+    // connection is a long-lived service whose interesting behaviour is timing
+    // — ping cadence, backoff, watchdog — and the moment it can reach a
+    // BuildContext, proving any of that needs a widget tree.
+    test('data/broker/ imports no Flutter', () {
+      final offenders = <String>[];
+      for (final file in _dartFilesIn('lib/data/broker')) {
+        for (final import in _importsOf(file)) {
+          if (import.startsWith('package:flutter/') ||
+              import.startsWith('package:flutter_test/') ||
+              import.startsWith('package:flutter_riverpod/')) {
+            offenders.add('${file.path}: $import');
+          }
+        }
+      }
+
+      expect(
+        offenders,
+        isEmpty,
+        reason:
+            'the feed is a service, not a widget. A Flutter import here means '
+            'its timing behaviour can no longer be tested without pumping a '
+            'widget tree.',
+      );
+    });
+
+    test('the tick decoder is pure — no I/O, no sockets, no files', () {
+      // §5.5: bytes in, domain object out. It is the highest-risk file in the
+      // project, and the only thing making it testable against a fixture with
+      // no network is that it cannot reach one.
+      final source = File(
+        'lib/data/broker/tick_decoder.dart',
+      ).readAsStringSync();
+
+      for (final forbidden in const [
+        "import 'dart:io'",
+        'WebSocket',
+        'HttpClient',
+        'File(',
+      ]) {
+        expect(
+          source.contains(forbidden),
+          isFalse,
+          reason: 'tick_decoder.dart must stay a pure function; found '
+              '"$forbidden"',
+        );
+      }
+    });
+  });
+
   group('hard prohibitions', () {
     test('no order placement or mutating broker endpoint anywhere in lib/', () {
       final forbidden = RegExp(
