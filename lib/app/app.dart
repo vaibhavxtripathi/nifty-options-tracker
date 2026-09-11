@@ -12,6 +12,7 @@ class NiftyOptionsApp extends ConsumerWidget {
     return MaterialApp.router(
       title: 'Nifty Options Tracker',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: AppTheme.scrollBehavior,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       routerConfig: ref.watch(routerProvider),
