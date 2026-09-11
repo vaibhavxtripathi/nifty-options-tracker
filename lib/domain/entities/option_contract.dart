@@ -84,6 +84,17 @@ final class OptionContract {
     tickSize,
   );
 
+  /// A human-readable name: strike, type and expiry, in the order a trader
+  /// says them. The broker symbol (`NIFTY22SEP2624150CE`) is precise but
+  /// unreadable at a glance, and it stops at the mapping boundary by the same
+  /// rule that keeps every other broker field name there.
+  String get displayName {
+    final strikeText = strike == strike.roundToDouble()
+        ? strike.toStringAsFixed(0)
+        : strike.toString();
+    return '$strikeText ${optionType.code}';
+  }
+
   /// Names the contract rather than dumping its fields, because this reaches
   /// the logger and a field dump there is noise.
   @override

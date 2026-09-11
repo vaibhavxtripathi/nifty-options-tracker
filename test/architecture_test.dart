@@ -194,6 +194,46 @@ void main() {
     });
   });
 
+  group('no credential ships in the app bundle', () {
+    // The APK is handed to a client. Angel One's credential authenticates a
+    // full trading account, so the one thing that must never be in the bundle
+    // is a real value for it.
+    test('the bundled demo fixture carries no credential-shaped text', () {
+      final bytes = File('assets/demo/feed_session.bin').readAsBytesSync();
+
+      // A JWT, an API key or a base32 secret would all appear as a long run of
+      // printable ASCII. Binary market data contains none.
+      var run = 0;
+      var longest = 0;
+      for (final byte in bytes) {
+        final printable = byte >= 0x20 && byte < 0x7F;
+        run = printable ? run + 1 : 0;
+        if (run > longest) longest = run;
+      }
+
+      expect(
+        longest,
+        lessThan(12),
+        reason:
+            'a run of printable characters this long in market data suggests '
+            'text that should not be there — check before shipping the APK',
+      );
+    });
+
+    test('no asset other than the recording is bundled', () {
+      // Keeps the surface small: a future asset is a deliberate decision
+      // rather than something that arrives with a directory.
+      final pubspec = File('pubspec.yaml').readAsStringSync();
+      final assetLines = pubspec
+          .split('\n')
+          .map((l) => l.trim())
+          .where((l) => l.startsWith('- assets/'))
+          .toList();
+
+      expect(assetLines, ['- assets/demo/feed_session.bin']);
+    });
+  });
+
   group('hard prohibitions', () {
     test('no order placement or mutating broker endpoint anywhere in lib/', () {
       final forbidden = RegExp(

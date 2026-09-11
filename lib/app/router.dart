@@ -6,6 +6,7 @@ import '../presentation/auth/auth_providers.dart';
 import '../presentation/auth/register_screen.dart';
 import '../presentation/auth/sign_in_screen.dart';
 import '../presentation/auth/splash_screen.dart';
+import '../presentation/detail/detail_screen.dart';
 import '../presentation/search/search_screen.dart';
 import 'routes.dart';
 
@@ -44,6 +45,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: Routes.home,
         builder: (_, _) => const SearchScreen(),
+      ),
+      GoRoute(
+        path: Routes.detail,
+        builder: (_, state) =>
+            DetailScreen(token: state.pathParameters['token'] ?? ''),
       ),
     ],
   );

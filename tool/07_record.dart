@@ -1,6 +1,6 @@
 // Phase 0, step 7 — record a live session. MARKET HOURS ONLY.
 //
-// Writes test/fixtures/feed_session.bin: raw binary frames plus arrival
+// Writes assets/demo/feed_session.bin: raw binary frames plus arrival
 // timestamps. Per SPEC §6 this is the single most important artifact in the
 // project — it is what makes every later phase buildable at any hour, against
 // real exchange data rather than invented numbers.
@@ -72,7 +72,7 @@ Future<void> main(List<String> args) async {
   }).timeout(const Duration(seconds: 15));
   pass('Connected');
 
-  final out = File('test/fixtures/feed_session.bin');
+  final out = File('assets/demo/feed_session.bin');
   final sink = out.openWrite();
   sink.add(ascii.encode(_magic));
   final head = ByteData(4)

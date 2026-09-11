@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../app/routes.dart';
 import '../../app/theme.dart';
 import '../../core/error/failures.dart';
 import '../../data/contracts/contract_index.dart';
@@ -108,6 +110,7 @@ class _Results extends ConsumerWidget {
       itemBuilder: (context, i) => ContractRow(
         contract: results[i],
         isNearestExpiry: index?.isNearestExpiry(results[i]) ?? false,
+        onTap: () => context.push(Routes.detailFor(results[i].token)),
       ),
     );
   }

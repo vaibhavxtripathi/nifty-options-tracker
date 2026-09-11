@@ -32,6 +32,15 @@ final class ContractIndex {
   bool isNearestExpiry(OptionContract contract) =>
       _nearestExpiry != null && contract.expiry == _nearestExpiry;
 
+  /// The contract with this broker token, or null if it is not in today's
+  /// universe — which can happen if a deep link outlives the daily refresh.
+  OptionContract? findByToken(String token) {
+    for (final contract in _contracts) {
+      if (contract.token == token) return contract;
+    }
+    return null;
+  }
+
   /// Contracts matching [query], in expiry-then-strike order.
   ///
   /// A blank query returns everything, so the screen has something to show

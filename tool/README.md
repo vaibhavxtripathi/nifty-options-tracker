@@ -20,7 +20,7 @@ dart tool/01_login.dart
 | `04_ping_proof.dart` | 4 | the 10s ping is mandatory (A/B: unpinged dies, pinged survives) | session |
 | `05_refresh.dart` | 5 | `generateTokens` yields a *usable* jwt with no fresh TOTP | session |
 | `06_snapquote.dart` | 6 | every §3.4 offset and the ÷100 divisor | session + **market hours** |
-| `07_record.dart` | 7 | records `test/fixtures/feed_session.bin` | session + **market hours** |
+| `07_record.dart` | 7 | records `assets/demo/feed_session.bin` | session + **market hours** |
 
 Steps 6–7 need 09:15–15:30 IST on a weekday. Everything else runs any time.
 

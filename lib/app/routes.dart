@@ -11,6 +11,12 @@ final class Routes {
   /// The signed-in landing screen: contract search.
   static const String home = '/home';
 
+  /// The detail screen, parameterised by broker token.
+  static const String detail = '/detail/:token';
+
+  /// Builds a concrete detail path for [token].
+  static String detailFor(String token) => '/detail/$token';
+
   /// Routes reachable while signed out.
   static const Set<String> unauthenticated = {signIn, register};
 }

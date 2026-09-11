@@ -39,3 +39,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    # A recorded market session, replayed when the exchange is shut so the app
+    # can be demonstrated at any hour. Real Angel One market data, verified to
+    # contain no credential material, and always shown behind a banner naming
+    # it as a recording.
+    - assets/demo/feed_session.bin

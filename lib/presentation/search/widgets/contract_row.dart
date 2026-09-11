@@ -10,6 +10,7 @@ class ContractRow extends StatelessWidget {
   const ContractRow({
     required this.contract,
     required this.isNearestExpiry,
+    this.onTap,
     super.key,
   });
 
@@ -19,12 +20,15 @@ class ContractRow extends StatelessWidget {
   /// almost always wants (§5.3).
   final bool isNearestExpiry;
 
+  final VoidCallback? onTap;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isCall = contract.optionType == OptionType.call;
 
     return ListTile(
+      onTap: onTap,
       leading: CircleAvatar(
         backgroundColor: isCall
             ? theme.colorScheme.primaryContainer
