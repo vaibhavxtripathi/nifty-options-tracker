@@ -278,6 +278,89 @@ void main() {
     });
   });
 
+  group('every decoded value is plausible, not merely present', () {
+    // Added after a real miss. §3.4's table lists offset 139 as an int64, and
+    // the decoder believed it — producing "+4581235513960227840.00%" on the
+    // device. Every assertion aimed at that field had been written from the
+    // same wrong premise as the decoder, so nothing caught it.
+    //
+    // A round-trip test cannot find an error like that. Only a *range* test
+    // can: the question is not "did we read the bytes we wrote" but "could
+    // this number be true of a real option".
+    test('OI change is a percentage, not an astronomical integer', () {
+      for (final frame in frames) {
+        final tick = decodeSnapQuote(frame.payload);
+        expect(
+          tick.openInterestChangePercent.abs(),
+          lessThan(1000),
+          reason:
+              'offset 139 is a float64 despite the spec saying int64; read as '
+              'an int it yields ~4.6e18',
+        );
+      }
+    });
+
+    test('no decoded double is astronomical or non-finite', () {
+      // A blanket guard over every numeric field. Any future offset error
+      // large enough to matter trips this, without a hand-written assertion
+      // per field.
+      for (final frame in frames) {
+        final tick = decodeSnapQuote(frame.payload);
+        final values = <String, double>{
+          'ltp': tick.lastTradedPrice,
+          'close': tick.previousClose,
+          'open': tick.open,
+          'high': tick.high,
+          'low': tick.low,
+          'avg': tick.averageTradedPrice,
+          'upperCircuit': tick.upperCircuit,
+          'lowerCircuit': tick.lowerCircuit,
+          'week52High': tick.fiftyTwoWeekHigh,
+          'week52Low': tick.fiftyTwoWeekLow,
+          'oiChange': tick.openInterestChangePercent,
+          'totalBuy': tick.totalBuyQuantity,
+          'totalSell': tick.totalSellQuantity,
+        };
+        values.forEach((name, value) {
+          expect(value.isFinite, isTrue, reason: '\$name is not finite');
+          expect(
+            value.abs(),
+            lessThan(1e9),
+            reason: '\$name = \$value is too large to be a real market value',
+          );
+        });
+      }
+    });
+
+    test('day OHLC is internally consistent where the contract traded', () {
+      // high >= low, and the last price sits inside the day range. Three
+      // offsets agreeing is far harder to fake with a wrong constant than one.
+      //
+      // Skipped when high == 0, which is not a decode error: an illiquid
+      // strike that has not traded today reports zero OHLC while still
+      // carrying an LTP from an earlier session. The recorded far-OTM call is
+      // exactly that case, and asserting a range over it would be asserting
+      // that every contract trades every day.
+      for (final frame in frames) {
+        final tick = decodeSnapQuote(frame.payload);
+        expect(tick.high, greaterThanOrEqualTo(tick.low));
+        if (tick.high == 0) continue;
+        expect(tick.lastTradedPrice, inInclusiveRange(tick.low, tick.high));
+      }
+    });
+
+    test('circuit limits bracket the traded price', () {
+      for (final frame in frames) {
+        final tick = decodeSnapQuote(frame.payload);
+        expect(tick.upperCircuit, greaterThan(tick.lowerCircuit));
+        expect(
+          tick.lastTradedPrice,
+          inInclusiveRange(tick.lowerCircuit, tick.upperCircuit),
+        );
+      }
+    });
+  });
+
   group('across the whole recording', () {
     test('every tick has a coherent book where both sides exist', () {
       for (final frame in frames) {

@@ -169,10 +169,21 @@ MarketTick decodeSnapQuote(Uint8List bytes) {
       _Offsets.totalSellQuantity,
       Endian.little,
     ),
-    // A percentage, not a price: no ÷100.
-    openInterestChangePercent: data
-        .getInt64(_Offsets.openInterestChangePercent, Endian.little)
-        .toDouble(),
+    // **A float64, despite §3.4's table saying int64.** Read as an integer
+    // this yields 4.58e18 — astronomical nonsense that renders as
+    // "+4581235513960227840.00%". As a float64 it reads -5.82 to +2.11 across
+    // both recorded sessions, which is a plausible OI change.
+    //
+    // Caught on the device rather than by a test, because every assertion
+    // pointed at this field was written from the same wrong premise as the
+    // decoder. The lesson is that a *decoded value* needs a plausibility check
+    // and not only a round-trip — the spec's own table was the thing at fault.
+    //
+    // Already a percentage, so no ÷100.
+    openInterestChangePercent: data.getFloat64(
+      _Offsets.openInterestChangePercent,
+      Endian.little,
+    ),
     upperCircuit: _rupees(data, _Offsets.upperCircuit),
     lowerCircuit: _rupees(data, _Offsets.lowerCircuit),
     fiftyTwoWeekHigh: _rupees(data, _Offsets.fiftyTwoWeekHigh),

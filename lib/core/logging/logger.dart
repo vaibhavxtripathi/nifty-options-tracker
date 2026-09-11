@@ -43,6 +43,19 @@ final class Log {
       error: error,
       stackTrace: stackTrace,
     );
+
+    // `developer.log` reaches the VM service — DevTools and `flutter run` —
+    // but **not** logcat, so a line logged this way is invisible when checking
+    // an installed APK with `adb logcat`. §6 Phase 4 asks for back-navigation
+    // to be *proved with a log line*, and a proof nobody can read is not one.
+    //
+    // Debug builds only: this is the one place a message reaches stdout, and
+    // release builds must stay quiet. The `avoid_print` ban is honoured —
+    // `debugPrint` is not `print`, and this remains the single chokepoint
+    // where the same no-credential-material rule applies.
+    if (kDebugMode) {
+      debugPrint('[nifty] $message');
+    }
   }
 
   static const int _debugLevel = 500;
