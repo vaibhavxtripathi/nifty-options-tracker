@@ -59,10 +59,12 @@ final class _Offsets {
   const _Offsets._();
 
   static const int mode = 0;
-  static const int exchangeType = 1;
   static const int token = 2;
   static const int tokenLength = 25;
-  static const int sequence = 27;
+  // Offsets 1 (exchange type) and 27 (sequence number) are deliberately
+  // absent: both are in the table above for reference, but nothing in the
+  // domain model needs them, and an unused constant is one more thing that
+  // can silently drift out of step with the wire format.
   static const int exchangeTimestamp = 35;
   static const int lastTradedPrice = 43;
   static const int lastTradedQuantity = 51;
