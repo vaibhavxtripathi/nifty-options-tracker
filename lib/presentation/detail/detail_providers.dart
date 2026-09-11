@@ -129,6 +129,12 @@ Stream<MarketTick> _replayTicks(Ref ref) async* {
   final frames = await DemoFixture.load();
   final replay = ReplayFeedConnection(frames: frames, loop: true);
 
+  // Logged at both ends of the lifetime, not just teardown. A pause/resume
+  // cycle is only observable if the restart says so too — §7.5 asks for
+  // background-and-resume to be verified, and a silent resume is
+  // indistinguishable from a frozen screen in a log.
+  Log.info('Replay started (${frames.length} frames)');
+
   ref.onDispose(() {
     Log.info('Replay stopped; screen closed');
     unawaited(replay.dispose());
@@ -143,6 +149,7 @@ Stream<MarketTick> _liveTicks(Ref ref, String token) async* {
 
   await session.ensureSession();
   await connection.subscribe(token);
+  Log.info('Subscribed \$token; detail screen open');
 
   // The log line §6 criterion 2 asks for, proving the unsubscribe happened on
   // back-navigation rather than being assumed.
