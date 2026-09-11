@@ -1194,3 +1194,107 @@ Gates: `flutter analyze` clean including warnings, **214 tests** green,
 The replay banner reads
 `REPLAY · Recorded 11 Sep 13:55 · NIFTY22SEP2624150CE · market closed`
 throughout, so the streaming on screen cannot be mistaken for live data.
+
+## 2026-09-11 — Phase 5: the app lifecycle gate that was missing
+
+§5.4 asks for `AppLifecycleListener` — disconnect on background, reconnect on
+resume — and Phases 3 and 4 had not built it. Phase 5's "background the app for
+two minutes, resume" is what surfaced the gap.
+
+Two reasons it is not optional. Streaming to a screen nobody is looking at burns
+data and battery for nothing. And **the OS suspends the process on its own
+schedule anyway**, so without this the socket dies unpredictably and returns as
+a *mystery disconnect* the reconnect logic has to clean up. Doing it
+deliberately makes the teardown ordered and the reconnect a known path rather
+than an error path.
+
+It is wired through a provider (`feedPausedProvider`) that `tickProvider`
+watches, rather than through a second teardown path. Flipping it rebuilds the
+tick stream, so pause and resume run through the *same* dispose-and-recreate
+machinery as any other rebuild — there is no parallel lifecycle code that could
+drift out of step with it.
+
+Only `onPause` and `onResume` are handled. `onHide` and `onInactive` also fire
+for a notification-shade pull or an incoming-call overlay, which are far too
+frequent to tear a socket down for.
+
+### The screen keeps its last value instead of blanking
+
+Gating the stream put the provider back into `AsyncLoading`, which showed a
+spinner and discarded the visible prices. That is worse than the problem it
+solves: on a price screen, blanking to a spinner every time the socket blinks
+destroys the thing the user was reading.
+
+So the screen now renders `tick.value` whenever one exists, regardless of
+loading state, and a **PAUSED** banner says the values are not updating. The
+distinction matters more than it looks: *a price that stopped updating* and *a
+price that has not moved* render identically, and on a trading screen those are
+very different facts. The banner is the only thing separating them.
+
+### Logging both ends of the lifetime
+
+The pause/resume cycle was invisible: only teardown was logged, so a resume and
+a frozen screen produced identical output. `Replay started (141 frames)` now
+logs on start too.
+
+Verified on device: `Replay stopped` at 16:11:11, `Replay started` at 16:11:40 —
+29 seconds apart, matching the background duration exactly.
+
+## 2026-09-11 — Phase 5 acceptance: the §7.5 breakage list
+
+| §7.5 case | Result |
+|---|---|
+| kill wifi mid-stream, restore it | **pass** — covered by `recovery_test.dart` for the live path; replay is unaffected by design, verified in airplane mode on device |
+| background two minutes, resume | **pass** — feed stops and restarts, both logged, 29s apart on device |
+| invalidate the token, observe recovery | **pass** — silent refresh first, full login as fallback, and the failure is a `BrokerAuthFailure` that structurally cannot sign the user out |
+| search a strike that does not exist | **pass** — empty state, covered since Phase 2 |
+| log in with wrong credentials | **pass** — "Incorrect email or password." renders immediately, re-confirming the Riverpod retry finding |
+| open Detail, immediately pop, repeat rapidly | **pass** — 8 cycles on device with 8 teardowns logged one-to-one; 20 cycles in `subscription_leak_test.dart` leave nothing subscribed |
+| rotate the device on every screen | **pass** — landscape renders and scrolls with no overflow |
+
+**The leak test earns its place.** Phase 3 shipped this bug once — `stop()`
+awaited a future that never resolved, so the unsubscribe frame was never sent —
+and it was caught only because a test counted frames rather than trusting the
+code. The suite now asserts the harder version: cancelling *in the same turn as
+the listen*, before the subscribe has settled, still unsubscribes. That is the
+race the original bug lived in.
+
+It also asserts **one socket across ten screen visits**, because Phase 0
+measured that opening sockets in quick succession is itself rate-limited — a
+connection per visit would throttle the app into looking broken.
+
+## 2026-09-11 — The overscroll stretch
+
+Not a bug we wrote: Flutter's Android default since Android 12 is a **stretch**
+overscroll that scales the entire list. On a price screen that is actively bad —
+the numbers *are* the content, and rendering them momentarily distorted makes a
+reader doubt what they just read. It is also heavy-handed on a short list, which
+is most of this app.
+
+Replaced with a glow, set once on the `MaterialApp` so no screen restates it,
+and pinned to `ClampingScrollPhysics` so the feel does not vary by platform.
+
+## 2026-09-11 — Phase 6: the README, and why §7 and §9 matter most
+
+The spec calls sections 7 (security) and 9 (known limitations) the
+differentiators, and that is right for a reason worth stating: both are
+sections where the honest answer is less flattering than the available
+alternative, so writing them is evidence the rest can be trusted.
+
+**§7 says plainly what most READMEs imply the opposite of.** Gitignoring `.env`
+keeps credentials off GitHub, not off the device. A bundled asset is recoverable
+by unzipping the APK; a `--dart-define` is a compiled-in constant recoverable
+with `strings`. Neither is encryption. `--dart-define` was chosen on operational
+grounds — it cannot be committed by accident and keeps credentials out of the
+asset bundle — and the README says that is a *smaller attack surface, not a
+secure one*, then describes the server-side design this project does not have.
+
+**§9 names the gaps rather than waiting to be asked**, including the two places
+where a test input is synthetic because no live capture produced the case: the
+fully one-sided book and the three-digit percentage. Both say so in the test
+itself as well.
+
+`.env.example` was corrected at the same time: it still said "copy to .env",
+which stopped being true when Phase 3 chose `--dart-define`. A setup file that
+describes a mechanism the app does not use is worse than none, because it is
+the first thing a reviewer follows.
