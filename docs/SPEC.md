@@ -264,12 +264,19 @@ Use `ByteData.view(bytes.buffer)` with `Endian.little` on every read.
 | 115–123 | int64 | **close (previous close)** |
 | 123–131 | int64 | last traded timestamp |
 | 131–139 | int64 | **open interest** |
-| 139–147 | int64 | OI change % |
+| 139–147 | **float64** | OI change % — *corrected 2026-09-11; the table said int64* |
 | 147–347 | — | **best five** — 10 entries × 20 bytes |
 | 347–355 | int64 | upper circuit |
 | 355–363 | int64 | lower circuit |
 | 363–371 | int64 | 52-week high |
 | 371–379 | int64 | 52-week low |
+
+> **Correction (2026-09-11, Phase 4).** Offset 139 is a **float64**, not an
+> int64. Read as an integer it yields ~4.6e18 and renders as
+> `+4581235513960227840.00%`; read as a float64 it is −5.82 to +2.11 across two
+> independent live captures. Found on-device, not by a test — every assertion
+> aimed at the field had been written from the same wrong premise as the
+> decoder.
 
 **Best-five entry (20 bytes each, 10 entries from offset 147).** Entries 0–4 are buy,
 entries 5–9 are sell:
@@ -405,7 +412,7 @@ final class FeedFailure          extends AppFailure { ... }  // socket dropped
 final class ContractFailure      extends AppFailure { ... }  // fetch / parse
 final class NetworkFailure       extends AppFailure { ... }
 ```
-
+  
 Sealed so `switch` is exhaustiveness-checked. Adding a failure type later
 becomes a compile error at every render site — an unhandled error state cannot
 ship.

@@ -984,3 +984,213 @@ Gates: `flutter analyze` clean including warnings, **175 tests** green (95 of
 them new in this phase), `dart analyze tool/` clean.
 
 No UI work, per §6. The detail screen is Phase 4.
+
+## 2026-09-11 — Replay when the market is shut, and only then
+
+The app is handed to the client on a **Saturday**. The reviewer's headline
+graded criterion is *"live data actually streams and updates"* (§2). Without
+intervention they would open the detail screen, see a correct and honest
+"market closed" state, and have no way to observe streaming at all.
+
+The replay connection built in Phase 3 already solved this — it was tested,
+reproduced the recorded timing within 2 ms, and was wired to nothing a user
+could reach. Phase 4 wires it.
+
+**The rule, and the part that was corrected during planning.** My first proposal
+was "replay whenever live data is unavailable", which quietly included *missing
+broker credentials*. That was wrong, and the correction is worth recording
+because the reasoning generalises:
+
+```
+market open + credentials    -> LIVE
+market open + no credentials -> a setup error naming the missing keys
+market closed                -> REPLAY
+```
+
+A shut exchange is an **expected condition nobody can fix**, so a labelled
+recording is the most useful honest answer. Absent credentials are a **fixable
+defect**, and routing them to replay would hide a broken live integration behind
+something that looks like it works — the reviewer would never learn the real
+path was misconfigured, which is the opposite of what a demo is for.
+
+The general principle: when adding a fallback, enumerate what reaches it and ask
+of each condition whether it is *expected* or a *defect*. Defects get an error
+naming what is missing. Only expected conditions get the fallback. Collapsing
+the two because the code path is convenient is how a broken build ships looking
+healthy.
+
+`resolveFeedSource` is a pure function in `domain/` taking the market status and
+the configuration, so all three branches are unit-tested without a clock or a
+socket, and "why am I seeing replay?" has exactly one place to read the answer.
+
+### The banner is part of the feature, not decoration
+
+A recording that ticks convincingly is **indistinguishable from a live feed**
+unless the app says otherwise. So the banner is pinned above the content, cannot
+be dismissed, and names three things: that it is a replay, when it was recorded,
+and **which instrument** — because replay streams what was captured rather than
+whichever row was tapped. Letting a reader believe the recording matched their
+selection would be the dishonest version of this feature.
+
+`ReplayFeed` carries `recordedAt` in the type rather than looking it up
+separately, because a banner reading "replay" is ambiguous while one reading
+"recorded 11 Sep 13:55" cannot be misread as live.
+
+### What ships in the APK
+
+The fixture moved from `test/fixtures/` to `assets/demo/` — `test/` is not
+bundled, and the replay needs it at runtime. That means **real Angel One market
+data ships inside the handover build**, which was a decision to take explicitly
+rather than quietly: it was scanned before committing and again by an
+architecture test, which fails the build if any run of twelve or more printable
+characters appears in it. Binary market data contains none; a JWT, an API key or
+a base32 secret would all trip it.
+
+**No `ANGEL_*` credential ships in the APK.** Those arrive by `--dart-define` at
+build time and a build without them is still fully usable — auth, search, and
+replay all work. That is what makes the app reviewable by someone who has no
+Angel One account at all.
+
+## 2026-09-11 — Conflation extracted, so the demo cannot diverge from production
+
+Phase 3 put the §5.7 conflation inside `MarketDataRepositoryImpl`. Phase 4 needs
+the same shaping on the replay path, and copying it would have been the obvious
+mistake: two implementations drift, and the one that drifts is the demo — the
+version a reviewer actually watches.
+
+So it is now a standalone `conflate` transformer shared by the live path, the
+replay path and the repository. **A demo that rendered differently from
+production would be demonstrating the wrong thing**, and the only way to
+guarantee it does not is to make the two the same code.
+
+The transformer keeps the properties that mattered: the first value is emitted
+immediately (a 100 ms blank on open reads as "still loading" rather than
+"live"), a burst collapses to one emission per interval with the newest value
+winning, a pending value is flushed on close rather than swallowed, and errors
+pass straight through rather than being conflated away.
+
+## 2026-09-11 — `autoDispose.family`, and why §4.3 called it load-bearing
+
+`tickProvider` is a `StreamProvider.autoDispose.family<MarketTick, String>`.
+§4.3 named this the load-bearing reason for choosing Riverpod, and Phase 4 is
+where that claim gets cashed.
+
+One live subscription per instrument, torn down when nothing watches it, maps
+exactly onto the provider's lifetime. So the graded requirement — *the
+subscription is cleanly closed when the user backs out* — is **structural**:
+there is no code path that skips it, because there is no code path that owns it.
+The `ref.onDispose` carries the unsubscribe and the log line §6 criterion 2 asks
+for, and the replay branch stops its timer the same way, so a closed screen
+never leaves one running behind it.
+
+This is the same guarantee the Phase 3 subscription-leak bug violated by hand.
+Structural is better than careful, but the Phase 3 fix is the reminder that
+structural still has to be tested.
+
+## 2026-09-11 — Formatting is pure, because that is where the layout breaks
+
+§7 rules out widget tests, so anything that could break a layout lives in pure
+functions and is tested directly.
+
+**Three-digit percentages** (§6 criterion 4) are the case §3.5 trap 4 warns
+about: ±200% in a day is *ordinary* for an option, not an edge case. The
+formatter is width-agnostic and `PriceHeader` uses a `Wrap` rather than a fixed
+`Row`, so "+212.50%" moves to its own line instead of overflowing. The test
+inputs are **synthetic, and say so**: two live captures on 11 Sep — one liquid
+strike and six near-expiry OTM calls — reached only −33%, so no recorded fixture
+contains a three-digit move. That is the same posture taken for the one-sided
+book in Phase 3, and for the same reason: claiming fixture coverage that does
+not exist is worse than naming the gap.
+
+**Absent values render an em dash, never a zero.** `₹0.00` reads as a real quote
+at zero, which is a different and wrong claim from "there is no quote". This
+covers the null percent change when `close == 0` and the empty book side from
+§3.5 trap 5 — criterion 5 falls out of the formatter rather than out of the
+widget.
+
+**Quantities use Indian digit grouping**: 710190 renders as 7,10,190, not
+710,190. The app shows Indian market data to a reader who thinks in lakhs, and
+western grouping of a six-figure open-interest number reads as foreign.
+
+## 2026-09-11 — §3.4 corrected: OI change is a float64, and how it was missed
+
+The detail screen rendered **`+4581235513960227840.00%`** the first time it ran
+on a device. §3.4's table lists offset 139 as an `int64`, the decoder believed
+it, and 4.6e18 is what that field contains when read as an integer. As a
+`float64` it reads −5.82 to +2.11 across two independent live captures — a
+plausible OI change.
+
+The spec was wrong. `docs/SPEC.md §3.4` is corrected.
+
+**The interesting part is why 29 passing tests did not catch it.** Every
+assertion aimed at that field had been written from the same premise as the
+decoder — that the field is an integer — so the test and the code agreed with
+each other while both disagreed with reality. This is the exact failure mode the
+Phase 3 entry claimed to have defended against by decoding a *real* fixture
+rather than synthetic packets, and the defence turned out to be incomplete: the
+fixture was real, but nothing asked whether the decoded *value* made sense.
+
+A round-trip test cannot find an error of this shape. The question it answers is
+"did we read back the bytes we wrote", and here the bytes were read back
+perfectly — as the wrong type. Only a **plausibility** test can find it, because
+the only thing wrong with 4.6e18 is that no option has ever had that OI change.
+
+So the suite now asserts ranges rather than only values:
+
+- every decoded double is finite and under 1e9 — a blanket guard that trips on
+  any future offset error large enough to matter, with no per-field assertion
+- day OHLC is internally consistent (`high >= low`, LTP inside the range)
+- circuit limits bracket the traded price
+
+Reverting the fix turns two of these red.
+
+**One of those checks immediately found real data I had assumed away.** The OHLC
+assertion failed on the illiquid strike, which reports `high == low == open == 0`
+while still carrying an LTP of ₹0.60 — because it has not traded *today* and the
+LTP is from an earlier session. That is not a decode error; it is what an
+untraded contract looks like, and asserting a day range over it would have been
+asserting that every contract trades every day. The check now skips a zero high
+and says why.
+
+**Two general lessons worth keeping.** First, a fixture makes a test *real* but
+does not make it *sufficient* — "we decoded the recording" and "the recording
+decoded into sensible numbers" are different claims, and only the second would
+have caught this. Second, the field was one of the §3.4 *bonus* fields, which is
+precisely why it survived: the required fields were checked against Phase 0's
+live step-6 output, and this one never was.
+
+## 2026-09-11 — The logger reaches logcat in debug builds
+
+§6 Phase 4 asks that back-navigation unsubscribing be **proved with a log
+line**. It could not be: `developer.log` reaches the VM service — DevTools and
+`flutter run` — but not logcat, so nothing was visible when checking an
+installed APK with `adb logcat`. A proof nobody can read is not a proof.
+
+`Log._emit` now also calls `debugPrint` under `kDebugMode`. Release builds stay
+silent, the `avoid_print` ban is untouched (`debugPrint` is not `print`), and
+the single-chokepoint rule still holds — this is the one place a message reaches
+stdout, and the same no-credential-material rule applies there.
+
+Verified on device: pressing back prints
+`[nifty] Replay stopped; screen closed` at the moment of navigation.
+
+## 2026-09-11 — Phase 4 acceptance: all §6 criteria met
+
+Run on the `Medium_Phone` emulator from an installed debug APK, **with the
+market closed** — deliberately, because that is the client's actual condition
+at handover.
+
+| §6 criterion | Result |
+|---|---|
+| values update live (or under replay) | **pass** — bid ₹10.75→₹10.80, spread ₹0.10→₹0.05, volume 7,10,190→7,10,255 across successive captures |
+| back-navigation unsubscribes, proved with a log line | **pass** — `[nifty] Replay stopped; screen closed` in logcat on back |
+| market-closed distinguishable from disconnected | **pass** — separate `FeedState` branches; closed carries a labelled replay, dropped shows reconnecting |
+| three-digit percentages do not break the layout | **pass** — `Wrap` rather than `Row`; formatter tested to ±9900%, inputs synthetic and stated as such |
+| an illiquid strike with a one-sided book renders | **pass** — em dash per side, spread and mid null, no crash |
+
+Gates: `flutter analyze` clean including warnings, **214 tests** green,
+`dart analyze tool/` clean.
+
+The replay banner reads
+`REPLAY · Recorded 11 Sep 13:55 · NIFTY22SEP2624150CE · market closed`
+throughout, so the streaming on screen cannot be mistaken for live data.
